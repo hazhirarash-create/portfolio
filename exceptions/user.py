@@ -29,3 +29,9 @@ class InactiveUserError(Exception):
         super().__init__(
             "User account is inactive"
         )
+
+class InvalidTokenError(Exception):
+    def __init__(self) -> None:
+        super().__init__(
+            "Could not validate credentials"
+        )

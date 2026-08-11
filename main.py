@@ -6,7 +6,8 @@ from exception_handlers import (
     username_already_exists_handler,
     user_already_exists_handler,
     inactive_user_handler,
-    invalid_credentials_handler
+    invalid_credentials_handler,
+    invalid_token_handler
     
 )
 from exceptions.project import ProjectNotFoundError
@@ -15,7 +16,8 @@ from exceptions.user import (
     UsernameAlreadyExistsError,
     UserAlreadyExistsError,
     InactiveUserError,
-    InvalidCredentialsError
+    InvalidCredentialsError,
+    InvalidTokenError
 )
 from routers import projects, users
 
@@ -53,4 +55,9 @@ app.add_exception_handler(
 app.add_exception_handler(
     InactiveUserError,
     inactive_user_handler
+)
+
+app.add_exception_handler(
+    InvalidTokenError,
+    invalid_token_handler
 )

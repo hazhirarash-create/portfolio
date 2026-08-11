@@ -7,7 +7,8 @@ from exceptions.user import (UsernameAlreadyExistsError,
                              EmailAlreadyExistsError,
                              UserAlreadyExistsError,
                              InactiveUserError,
-                             InvalidCredentialsError)
+                             InvalidCredentialsError,
+                             InvalidTokenError)
 
 
 async def project_not_found_handler(
@@ -71,6 +72,17 @@ async def inactive_user_handler(
 ) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_403_FORBIDDEN,
+        content={
+            "detail": str(exc)
+        }
+    )
+
+async def invalid_token_handler(
+        _request: Request,
+        exc: InvalidTokenError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_401_UNAUTHORIZED,
         content={
             "detail": str(exc)
         }
