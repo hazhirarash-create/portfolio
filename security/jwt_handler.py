@@ -53,9 +53,9 @@ def decode_access_token(token : str) -> int:
 
         user_id = int(subject)
 
-        return(user_id)
+        return user_id
     
-    except jwt.PyJWKError as exc:
+    except jwt.PyJWTError as exc:
         raise InvalidTokenError() from exc
 
     except ValueError as exc:
