@@ -13,6 +13,8 @@ from services.user_service import (create_user,
                                    )
 
 from security.jwt_handler import create_access_token
+from dependencies.auth import get_current_user
+from fastapi.security import OAuth2PasswordRequestForm
 
 
 router = APIRouter(
@@ -40,9 +42,14 @@ def register_user(
 )
 
 def login(
-    user_data : UserLogin,
-    db : Session = Depends(get_db)
+    form_data: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(get_db)
 ) -> TokenResponse:
+    
+    user_data = UserLogin(
+        username=form_data.username,
+        password=form_data.password
+    )
 
     user = authenticate_user(
         user_data=user_data,
@@ -57,3 +64,12 @@ def login(
         access_token=access_token,
         token_type="bearer"
     )
+
+@router.get(
+    "/me",
+    response_model=UserResponse
+)
+def get_me(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    return current_user
