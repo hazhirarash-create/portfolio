@@ -65,6 +65,7 @@ def authenticate_user(
         user_data : UserLogin,
         db : Session
         ) -> User:
+    
     user = get_user_by_username(
         username=user_data.username,
         db=db
