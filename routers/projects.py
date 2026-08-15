@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 from schemas.project import (
     ProjectCreate,
     ProjectUpdate,
@@ -7,12 +7,15 @@ from schemas.project import (
 )
 from sqlalchemy.orm import Session
 from database import get_db
-from models.models import Project
+from models.models import Project, User
 from services import project_service
+
+from dependencies.auth import get_current_admin_user
+
 
 router = APIRouter(
     prefix="/projects",
-    tags=["projects"]
+    tags=["Projects"]
 )
 
 
@@ -45,19 +48,27 @@ def get_project(project_id: int, db:Session=Depends(get_db)):
     return project
 
 
-@router.post("", response_model= ProjectResponse)
-def create_project(project: ProjectCreate, db: Session= Depends(get_db)):
-    new_project = project_service.create_project(project=project, db=db)
+@router.post("", response_model= ProjectResponse,
+             status_code=status.HTTP_201_CREATED
+             )
+def create_project(project: ProjectCreate,
+                   db: Session= Depends(get_db),
+                   current_admin: User = Depends(get_current_admin_user)
+                   ) -> Project:
+    new_project = project_service.create_project(project=project,
+                                                 db=db
+                                                 )
     return new_project
 
 
 @router.patch("/{project_id}", response_model= ProjectResponse)
 def update_project(project_id : int,
                    project: ProjectUpdate,
-                   db: Session = Depends(get_db)
-                   ):
+                   db: Session = Depends(get_db),
+                   current_admin: User = Depends(get_current_admin_user)
+                   ) -> Project:
     existing_project = project_service.update_project(
-         project_id=project_id,
+        project_id=project_id,
         project=project,
         db=db
         )
@@ -67,8 +78,9 @@ def update_project(project_id : int,
 
 @router.delete("/{project_id}")
 def delete_project(project_id: int,
-                  db: Session=Depends(get_db)
-                  ):
+                   db: Session=Depends(get_db),
+                   current_admin: User = Depends(get_current_admin_user)
+                  ) -> dict[str, str]:
     existing_project = project_service.delete_project(
          project_id= project_id,
          db = db

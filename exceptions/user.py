@@ -35,3 +35,9 @@ class InvalidTokenError(Exception):
         super().__init__(
             "Could not validate credentials"
         )
+
+class AdminAccessRequiredError(Exception):
+    def __init__(self) -> None:
+        super().__init__(
+            "Admin access required"
+        )

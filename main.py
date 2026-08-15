@@ -7,7 +7,8 @@ from exception_handlers import (
     user_already_exists_handler,
     inactive_user_handler,
     invalid_credentials_handler,
-    invalid_token_handler
+    invalid_token_handler,
+    admin_access_required_handler
     
 )
 from exceptions.project import ProjectNotFoundError
@@ -17,7 +18,8 @@ from exceptions.user import (
     UserAlreadyExistsError,
     InactiveUserError,
     InvalidCredentialsError,
-    InvalidTokenError
+    InvalidTokenError,
+    AdminAccessRequiredError
 )
 from routers import projects, users
 
@@ -60,4 +62,9 @@ app.add_exception_handler(
 app.add_exception_handler(
     InvalidTokenError,
     invalid_token_handler
+)
+
+app.add_exception_handler(
+    AdminAccessRequiredError,
+    admin_access_required_handler
 )

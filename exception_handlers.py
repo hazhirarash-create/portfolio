@@ -8,7 +8,8 @@ from exceptions.user import (UsernameAlreadyExistsError,
                              UserAlreadyExistsError,
                              InactiveUserError,
                              InvalidCredentialsError,
-                             InvalidTokenError)
+                             InvalidTokenError,
+                             AdminAccessRequiredError)
 
 
 async def project_not_found_handler(
@@ -83,6 +84,17 @@ async def invalid_token_handler(
 ) -> JSONResponse:
     return JSONResponse(
         status_code=status.HTTP_401_UNAUTHORIZED,
+        content={
+            "detail": str(exc)
+        }
+    )
+
+async def admin_access_required_handler(
+        _request: Request,
+        exc: AdminAccessRequiredError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_403_FORBIDDEN,
         content={
             "detail": str(exc)
         }

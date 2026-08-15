@@ -3,7 +3,9 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from database import get_db
-from exceptions.user import InvalidTokenError, InactiveUserError
+from exceptions.user import (InvalidTokenError,
+                             InactiveUserError,
+                             AdminAccessRequiredError)
 from models.models import User
 from security.jwt_handler import decode_access_token
 
@@ -27,3 +29,13 @@ def get_current_user(
         raise InactiveUserError()
 
     return user
+
+
+def get_current_admin_user(
+        current_user : User = Depends(get_current_user)
+) -> User:
+
+    if not current_user.is_admin:
+        raise AdminAccessRequiredError()
+
+    return current_user
