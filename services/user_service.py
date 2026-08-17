@@ -2,7 +2,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from models.models import User
 from schemas.user import UserCreate, UserLogin
-from security.password import hash_password
+from security.password import hash_password, DUMMY_PASSWORD_HASH
 from exceptions.user import (UsernameAlreadyExistsError,
                             EmailAlreadyExistsError,
                             UserAlreadyExistsError,
@@ -71,6 +71,9 @@ def authenticate_user(
         db=db
     )
     if user is None:
+        verify_password(plain_password=user_data.password,
+                        hashed_password=DUMMY_PASSWORD_HASH
+    )
         raise InvalidCredentialsError()
 
     password_is_valid = verify_password(

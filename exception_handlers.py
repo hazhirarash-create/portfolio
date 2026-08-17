@@ -64,6 +64,9 @@ async def invalid_credentials_handler(
         status_code=status.HTTP_401_UNAUTHORIZED,
         content={
             "detail": str(exc)
+        },
+        headers={
+            "WWW-Authenticate": "Bearer"
         }
     )
 
@@ -86,6 +89,9 @@ async def invalid_token_handler(
         status_code=status.HTTP_401_UNAUTHORIZED,
         content={
             "detail": str(exc)
+        },
+        headers={
+            "WWW-Authenticate": "Bearer"
         }
     )
 

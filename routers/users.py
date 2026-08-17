@@ -41,7 +41,6 @@ def register_user(
     "/login",
     response_model=TokenResponse
 )
-
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     db: Session = Depends(get_db)
