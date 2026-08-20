@@ -9,7 +9,8 @@ from exceptions.user import (UsernameAlreadyExistsError,
                              InactiveUserError,
                              InvalidCredentialsError,
                              InvalidTokenError,
-                             AdminAccessRequiredError)
+                             AdminAccessRequiredError,
+                             CompromisedPasswordError)
 
 
 async def project_not_found_handler(
@@ -103,5 +104,16 @@ async def admin_access_required_handler(
         status_code=status.HTTP_403_FORBIDDEN,
         content={
             "detail": str(exc)
+        }
+    )
+
+async def compromised_password_handler(
+        _request: Request,
+        exc: CompromisedPasswordError
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={
+            "detail" : str(exc)
         }
     )

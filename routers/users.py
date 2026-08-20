@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
+from pydantic import ValidationError
 
 from database import get_db
 from models.models import User
@@ -47,10 +48,17 @@ def login(
     db: Session = Depends(get_db)
 ) -> TokenResponse:
     
-    user_data = UserLogin(
-        username=form_data.username,
-        password=form_data.password
-    )
+    try:
+        user_data = UserLogin(
+            username=form_data.username,
+            password=form_data.password
+        )
+
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=exc.errors()
+        ) from exc
 
     user = authenticate_user(
         user_data=user_data,

@@ -41,3 +41,9 @@ class AdminAccessRequiredError(Exception):
         super().__init__(
             "Admin access required"
         )
+
+class CompromisedPasswordError(Exception):
+    def __init__(self) -> None:
+        super().__init__(
+            "This password is not allowed. Please choose another password."
+        )

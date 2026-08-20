@@ -50,8 +50,8 @@ class UserResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 class UserLogin(BaseModel):
-    username : str
-    password : str
+    username : str = Field(max_length=50)
+    password : str = Field(max_length=128)
 
     @field_validator("username", mode="before")
     @classmethod

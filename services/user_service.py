@@ -2,13 +2,16 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from models.models import User
 from schemas.user import UserCreate, UserLogin
-from security.password import hash_password, DUMMY_PASSWORD_HASH
-from exceptions.user import (UsernameAlreadyExistsError,
+from security.password import (hash_password,
+                               DUMMY_PASSWORD_HASH,
+                               verify_password)
+from exceptions.user import (CompromisedPasswordError, UsernameAlreadyExistsError,
                             EmailAlreadyExistsError,
                             UserAlreadyExistsError,
                             InvalidCredentialsError,
-                            InactiveUserError)
-from security.password import verify_password
+                            InactiveUserError,
+                            CompromisedPasswordError)
+from security.password_breach import check_pwned_password
 
 def get_user_by_username(username:str,
                          db:Session
@@ -36,6 +39,11 @@ def create_user(
                                        db=db)
     if existing_email is not None:
         raise EmailAlreadyExistsError(user_data.email)
+
+    pwned_password = check_pwned_password(user_data.password)
+
+    if pwned_password is True:
+        raise CompromisedPasswordError()
     
     hashed_password = hash_password(user_data.password)
 
