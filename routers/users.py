@@ -15,9 +15,11 @@ from services.user_service import (create_user,
 
 from security.jwt_handler import create_access_token
 from dependencies.auth import (get_current_user,
-                               get_current_admin_user)
+                               )
 
 from fastapi.security import OAuth2PasswordRequestForm
+
+from security.rate_limit import check_rate_limit
 
 
 router = APIRouter(
@@ -45,6 +47,7 @@ def register_user(
 )
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
+    _: None = Depends(check_rate_limit),
     db: Session = Depends(get_db)
 ) -> TokenResponse:
     
