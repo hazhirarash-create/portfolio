@@ -1,6 +1,7 @@
 import redis
 import time
 import uuid
+import logging
 
 from fastapi import HTTPException, Request, status
 
@@ -9,6 +10,8 @@ redis_client = redis.Redis(
     port=6379,
     decode_responses=True
 )
+
+logger = logging.getLogger(__name__)
 
 MAX_REQUESTS = 5
 WINDOW_SECONDS = 60
@@ -77,6 +80,10 @@ def check_rate_limit(request: Request) -> None:
             ]
         )
     except redis.RedisError:
+        logger.exception(
+            "Redis unavailable during login rate limiting",
+            exc_info=True
+        )
         return 
     
     if result == 0:

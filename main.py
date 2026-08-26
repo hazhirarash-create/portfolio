@@ -25,8 +25,12 @@ from exceptions.user import (
 )
 from routers import projects, users
 
+from core.logging_config import setup_logging
+
 
 app = FastAPI()
+
+setup_logging()
 
 app.include_router(projects.router)
 app.include_router(users.router)
