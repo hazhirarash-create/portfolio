@@ -62,7 +62,7 @@ def check_rate_limit(request: Request) -> None:
     client_ip = request.client.host
     key = f"login_rate_limit:{client_ip}"
 
-    current_time = int(time.time())
+    current_time = time.time()
     window_start = current_time - WINDOW_SECONDS
     unique_member = str(uuid.uuid4())
     try:
