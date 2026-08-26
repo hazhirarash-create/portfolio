@@ -1,10 +1,17 @@
 import redis
+import time
+import uuid
+
+from fastapi import HTTPException, Request, status
 
 redis_client = redis.Redis(
     host="localhost",
     port=6379,
     decode_responses=True
 )
+
+MAX_REQUESTS = 5
+WINDOW_SECONDS = 60
 
 RATE_LIMIT_SCRIPT = """
 local key = KEYS[1]
@@ -46,3 +53,34 @@ redis.call(
 
 return 1
 """
+
+rate_limit_script = redis_client.register_script(
+    RATE_LIMIT_SCRIPT
+)
+
+def check_rate_limit(request: Request) -> None:
+    client_ip = request.client.host
+    key = f"login_rate_limit:{client_ip}"
+
+    current_time = int(time.time())
+    window_start = current_time - WINDOW_SECONDS
+    unique_member = str(uuid.uuid4())
+    try:
+        result = rate_limit_script(
+            keys=[key],
+            args=[
+                window_start,
+                current_time,
+                MAX_REQUESTS,
+                unique_member,
+                WINDOW_SECONDS,
+            ]
+        )
+    except redis.RedisError:
+        return 
+    
+    if result == 0:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please try again later."
+        )
