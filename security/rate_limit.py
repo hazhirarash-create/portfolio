@@ -80,7 +80,7 @@ def check_rate_limit(request: Request) -> None:
             ]
         )
     except redis.RedisError:
-        logger.exception(
+        logger.warning(
             "Redis unavailable during login rate limiting",
             exc_info=True
         )
