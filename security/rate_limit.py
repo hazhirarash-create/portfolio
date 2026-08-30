@@ -1,14 +1,19 @@
 import redis
-import time
 import uuid
 import logging
 
 from fastapi import HTTPException, Request, status
+from core.config import (REDIS_HOST,
+                         REDIS_PORT,
+                         REDIS_CONNECT_TIMEOUT,
+                         REDIS_SOCKET_TIMEOUT)
 
 redis_client = redis.Redis(
-    host="localhost",
-    port=6379,
-    decode_responses=True
+    host=REDIS_HOST,
+    port=REDIS_PORT,
+    decode_responses=True,
+    socket_connect_timeout=REDIS_CONNECT_TIMEOUT,
+    socket_timeout=REDIS_SOCKET_TIMEOUT
 )
 
 logger = logging.getLogger(__name__)
@@ -19,11 +24,20 @@ WINDOW_SECONDS = 60
 RATE_LIMIT_SCRIPT = """
 local key = KEYS[1]
 
-local window_start = tonumber(ARGV[1])
-local current_time = tonumber(ARGV[2])
-local max_requests = tonumber(ARGV[3])
-local unique_member = ARGV[4]
-local ttl = tonumber(ARGV[5])
+local max_requests = tonumber(ARGV[1])
+local unique_member = ARGV[2]
+local ttl = tonumber(ARGV[3])
+
+local redis_time = redis.call("TIME")
+
+local seconds = tonumber(redis_time[1])
+local microseconds = tonumber(redis_time[2])
+
+local current_time =
+    seconds + (microseconds / 1000000)
+
+local window_start =
+    current_time - ttl
 
 redis.call(
     "ZREMRANGEBYSCORE",
@@ -65,15 +79,11 @@ def check_rate_limit(request: Request) -> None:
     client_ip = request.client.host
     key = f"login_rate_limit:{client_ip}"
 
-    current_time = time.time()
-    window_start = current_time - WINDOW_SECONDS
     unique_member = str(uuid.uuid4())
     try:
         result = rate_limit_script(
             keys=[key],
             args=[
-                window_start,
-                current_time,
                 MAX_REQUESTS,
                 unique_member,
                 WINDOW_SECONDS,

@@ -1,3 +1,5 @@
+from asyncio.log import logger
+
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from models.models import User
@@ -12,6 +14,9 @@ from exceptions.user import (CompromisedPasswordError, UsernameAlreadyExistsErro
                             InactiveUserError,
                             CompromisedPasswordError)
 from security.password_breach import check_pwned_password
+import logging
+
+logger = logging.getLogger(__name__)
 
 def get_user_by_username(username:str,
                          db:Session
@@ -82,6 +87,8 @@ def authenticate_user(
         verify_password(plain_password=user_data.password,
                         hashed_password=DUMMY_PASSWORD_HASH
     )
+        logger.warning("Login failed: user not found")
+
         raise InvalidCredentialsError()
 
     password_is_valid = verify_password(
@@ -90,9 +97,16 @@ def authenticate_user(
     )
 
     if not password_is_valid:
+        logger.warning("Login failed: invalid password")
         raise InvalidCredentialsError()
 
     if not user.is_active:
+        logger.warning("Login failed: inactive user")
         raise InactiveUserError()
+
+    logger.info(
+        "User login successful user_id=%s",
+        user.id
+    )
 
     return user
