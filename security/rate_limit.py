@@ -52,7 +52,26 @@ local current_count = redis.call(
 )
 
 if current_count >= max_requests then
-    return 0
+    local oldest_entry = redis.call(
+        "ZRANGE",
+        key,
+        0,
+        0,
+        "WITHSCORES"
+    )
+
+    local oldest_score = tonumber(
+        oldest_entry[2]
+    )
+
+    local retry_after = math.ceil(
+        (oldest_score + ttl) - current_time
+    )
+
+    return {
+        0,
+        retry_after
+    }
 end
 
 redis.call(
@@ -68,7 +87,9 @@ redis.call(
     ttl
 )
 
-return 1
+return {
+    1,
+    0}
 """
 
 rate_limit_script = redis_client.register_script(
@@ -95,7 +116,21 @@ def check_rate_limit(request: Request) -> None:
             exc_info=True
         )
         return 
-    
+    allowed = result[0]
+    retry_after = result[1]
+
+    if allowed == 0:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Too many login attempts. "
+                "Please try again later."
+            ),
+            headers={
+                "Retry-After": str(retry_after)
+            }
+        )
+        
     if result == 0:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
