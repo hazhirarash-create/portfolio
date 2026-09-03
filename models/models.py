@@ -52,6 +52,7 @@ class RefreshTokenStatus(str, Enum):
     ACTIVE = "active"
     USED = "used"
     REVOKED = "revoked"
+    
 class RefreshToken(BaseORMModel):
 
     __tablename__ = "refresh_tokens"
