@@ -36,6 +36,12 @@ class InvalidTokenError(Exception):
             "Could not validate credentials"
         )
 
+class RefreshTokenReuseDetectedError(Exception):
+    def __init__(self) -> None:
+        super().__init__(
+            "Refresh token reuse detected"
+        )
+
 class AdminAccessRequiredError(Exception):
     def __init__(self) -> None:
         super().__init__(

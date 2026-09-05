@@ -2,7 +2,7 @@ from asyncio.log import logger
 
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
-from models.models import User
+from models.models import User, RefreshToken, RefreshTokenStatus
 from schemas.user import UserCreate, UserLogin
 from security.password import (hash_password,
                                DUMMY_PASSWORD_HASH,
@@ -12,22 +12,60 @@ from exceptions.user import (CompromisedPasswordError, UsernameAlreadyExistsErro
                             UserAlreadyExistsError,
                             InvalidCredentialsError,
                             InactiveUserError,
-                            CompromisedPasswordError)
+                            CompromisedPasswordError,
+                            InvalidTokenError,
+                            RefreshTokenReuseDetectedError)
 from security.password_breach import check_pwned_password
 import logging
+from security.jwt_handler import (decode_refresh_token,
+                                  create_access_token,
+                                  create_refresh_token)
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
 def get_user_by_username(username:str,
                          db:Session
                          ) -> User | None:
-    return(db.query(User).filter_by(username=username).first())
+    return(db.query(User)
+           .filter_by(username=username)
+           .first()
+           )
 
 def get_user_by_email(email:str,
                       db:Session
                       ) -> User | None:
-    return (db.query(User).filter_by(email=email).first()) 
-    
+    return (db.query(User)
+            .filter_by(email=email)
+            .first()
+            ) 
+
+def get_refresh_token_by_jti(jti: str,
+                             db: Session
+                             ) -> RefreshToken | None:  
+    return (db.query(RefreshToken)
+            .filter(RefreshToken.jti == jti)
+            .first()
+            ) 
+
+def revoke_token_family(
+    family_id: str,
+    db: Session,
+) -> None:
+    now = datetime.now(timezone.utc)
+
+    active_tokens = (
+        db.query(RefreshToken)
+        .filter(
+            RefreshToken.family_id == family_id,
+            RefreshToken.status == RefreshTokenStatus.ACTIVE,
+        )
+        .all()
+    )
+
+    for token in active_tokens:
+        token.status = RefreshTokenStatus.REVOKED
+        token.revoked_at = now
 
 def create_user(
     user_data: UserCreate,
@@ -110,3 +148,85 @@ def authenticate_user(
     )
 
     return user
+
+def rotate_refresh_token(
+        refresh_token: str,
+        db: Session
+        ) -> tuple[str, str]: 
+
+    payload = decode_refresh_token(refresh_token)
+    
+    token_record = get_refresh_token_by_jti(
+        jti=payload["jti"],
+        db=db
+    )
+
+    if token_record is None:
+        raise InvalidTokenError()
+
+    if token_record.user_id != payload["user_id"]:
+        raise InvalidTokenError()
+
+    if token_record.family_id != payload["family_id"]:
+        raise InvalidTokenError()
+
+    if token_record.status == RefreshTokenStatus.REVOKED:
+        raise InvalidTokenError()
+
+    if token_record.status == RefreshTokenStatus.USED:
+        revoke_token_family(
+            family_id=token_record.family_id,
+            db=db
+        )
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        raise RefreshTokenReuseDetectedError()
+
+    logger.warning(
+    "Refresh token reuse detected family_id=%s",
+    token_record.family_id,
+    )
+
+    if token_record.status != RefreshTokenStatus.ACTIVE:
+        raise InvalidTokenError()
+
+    now = datetime.now(timezone.utc)
+
+    token_record.status = RefreshTokenStatus.USED
+    token_record.used_at = now
+
+    new_access_token = create_access_token(
+        user_id=token_record.user_id
+    )
+
+    (
+        new_refresh_token,
+        new_jti,
+        new_expires_at,
+    ) = create_refresh_token(
+        user_id=token_record.user_id,
+        family_id=token_record.family_id,
+    )
+
+    new_refresh_record = RefreshToken(
+        jti=new_jti,
+        user_id=token_record.user_id,
+        family_id=token_record.family_id,
+        expires_at=new_expires_at,
+        status=RefreshTokenStatus.ACTIVE,
+    )
+
+    db.add(new_refresh_record)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return (
+        new_access_token,
+        new_refresh_token,
+    )

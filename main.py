@@ -9,7 +9,8 @@ from exception_handlers import (
     invalid_credentials_handler,
     invalid_token_handler,
     admin_access_required_handler,
-    compromised_password_handler
+    compromised_password_handler,
+    reuse_refresh_token_handler
     
 )
 from exceptions.project import ProjectNotFoundError
@@ -21,7 +22,8 @@ from exceptions.user import (
     InvalidCredentialsError,
     InvalidTokenError,
     AdminAccessRequiredError,
-    CompromisedPasswordError
+    CompromisedPasswordError,
+    RefreshTokenReuseDetectedError
 )
 from routers import projects, users
 
@@ -78,4 +80,9 @@ app.add_exception_handler(
 app.add_exception_handler(
     CompromisedPasswordError,
     compromised_password_handler
+)
+
+app.add_exception_handler(
+    RefreshTokenReuseDetectedError,
+    reuse_refresh_token_handler
 )

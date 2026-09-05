@@ -10,7 +10,8 @@ from exceptions.user import (UsernameAlreadyExistsError,
                              InvalidCredentialsError,
                              InvalidTokenError,
                              AdminAccessRequiredError,
-                             CompromisedPasswordError)
+                             CompromisedPasswordError,
+                             RefreshTokenReuseDetectedError)
 
 
 async def project_not_found_handler(
@@ -105,6 +106,20 @@ async def admin_access_required_handler(
         content={
             "detail": str(exc)
         }
+    )
+
+async def refresh_token_reuse_handler(
+    _request: Request,
+    exc: RefreshTokenReuseDetectedError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        content={
+            "detail": str(exc)
+        },
+        headers={
+            "WWW-Authenticate": "Bearer"
+        },
     )
 
 async def compromised_password_handler(
