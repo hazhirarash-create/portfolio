@@ -7,10 +7,14 @@ from models.models import User
 from schemas.user import (UserCreate,
                           UserResponse,
                           TokenResponse,
-                          UserLogin
+                          UserLogin,
+                          TokenPairResponse,
+                          RefreshTokenRequest
                           )
 from services.user_service import (create_user,
-                                   authenticate_user
+                                   authenticate_user,
+                                   rotate_refresh_token,
+                                   create_login_tokens
                                    )
 
 from security.jwt_handler import create_access_token
@@ -43,13 +47,13 @@ def register_user(
 
 @router.post(
     "/login",
-    response_model=TokenResponse
+    response_model=TokenPairResponse
 )
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     _: None = Depends(check_rate_limit),
     db: Session = Depends(get_db)
-) -> TokenResponse:
+) -> TokenPairResponse:
     
     try:
         user_data = UserLogin(
@@ -72,8 +76,14 @@ def login(
         user_id=user.id
     )
 
-    return TokenResponse(
+    (access_token, refresh_token) = create_login_tokens(
+        user_id=user.id,
+        db=db
+    )
+
+    return TokenPairResponse(
         access_token=access_token,
+        refresh_token=refresh_token,
         token_type="bearer"
     )
 
@@ -85,3 +95,24 @@ def get_me(
     current_user: User = Depends(get_current_user)
 ) -> User:
     return current_user
+
+@router.post(
+    "/refresh",
+    response_model=TokenPairResponse
+)
+def refresh_tokens(
+    token_data: RefreshTokenRequest,
+    db: Session = Depends(get_db)
+) -> TokenPairResponse :
+
+    (new_access_token,
+    new_refresh_token) = rotate_refresh_token(
+        refresh_token=token_data.refresh_token,
+        db=db
+        )
+
+    return TokenPairResponse(
+        access_token= new_access_token,
+        refresh_token= new_refresh_token,
+        token_type= "bearer"
+    )

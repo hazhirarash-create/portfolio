@@ -21,6 +21,7 @@ from security.jwt_handler import (decode_refresh_token,
                                   create_access_token,
                                   create_refresh_token)
 from datetime import datetime, timezone
+import uuid
 
 logger = logging.getLogger(__name__)
 
@@ -230,3 +231,35 @@ def rotate_refresh_token(
         new_access_token,
         new_refresh_token,
     )
+
+def create_login_tokens(
+        user_id: int,
+        db: Session
+) -> tuple[str, str]:
+    
+    family_id = str(uuid.uuid4())
+
+    access_token = create_access_token(user_id=user_id)
+
+    (refresh_token, jti, expires_at) = create_refresh_token(
+        user_id=user_id,
+        family_id=family_id
+    )
+
+    refresh_record = RefreshToken(
+        jti=jti,
+        user_id=user_id,
+        family_id=family_id,
+        expires_at=expires_at,
+        status=RefreshTokenStatus.ACTIVE
+    )
+
+    db.add(refresh_record)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return(access_token,
+           refresh_token)
