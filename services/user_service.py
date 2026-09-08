@@ -1,5 +1,5 @@
 from asyncio.log import logger
-
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from models.models import User, RefreshToken, RefreshTokenStatus
@@ -195,42 +195,77 @@ def rotate_refresh_token(
 
     now = datetime.now(timezone.utc)
 
-    token_record.status = RefreshTokenStatus.USED
-    token_record.used_at = now
+    stmt = (update(RefreshToken)
+            .where(
+                RefreshToken.id == token_record.id,
+                RefreshToken.status == RefreshTokenStatus.ACTIVE)
+            .values(
+                status = RefreshTokenStatus.USED,
+                used_at = now)
+                )
+    result = db.execute(stmt)
 
-    new_access_token = create_access_token(
-        user_id=token_record.user_id
-    )
-
-    (
-        new_refresh_token,
-        new_jti,
-        new_expires_at,
-    ) = create_refresh_token(
-        user_id=token_record.user_id,
-        family_id=token_record.family_id,
-    )
-
-    new_refresh_record = RefreshToken(
-        jti=new_jti,
-        user_id=token_record.user_id,
-        family_id=token_record.family_id,
-        expires_at=new_expires_at,
-        status=RefreshTokenStatus.ACTIVE,
-    )
-
-    db.add(new_refresh_record)
-
-    try:
-        db.commit()
-    except Exception:
+    if result.rowcount != 1:
         db.rollback()
-        raise
 
-    return (
-        new_access_token,
-        new_refresh_token,
-    )
+        current_record = get_refresh_token_by_jti(
+            jti=payload["jti"],
+            db=db
+        )
+
+        if current_record is None:
+            raise InvalidTokenError()
+
+        if current_record.status == RefreshTokenStatus.USED:
+            revoke_token_family(
+                family_id=current_record.family_id,
+                db=db
+            )
+
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+
+            raise RefreshTokenReuseDetectedError()
+        
+        raise InvalidTokenError()
+
+    if result.rowcount == 1:
+        new_access_token = create_access_token(
+            user_id=token_record.user_id
+        )
+
+        (
+            new_refresh_token,
+            new_jti,
+            new_expires_at,
+        ) = create_refresh_token(
+            user_id=token_record.user_id,
+            family_id=token_record.family_id,
+        )
+
+        new_refresh_record = RefreshToken(
+            jti=new_jti,
+            user_id=token_record.user_id,
+            family_id=token_record.family_id,
+            expires_at=new_expires_at,
+            status=RefreshTokenStatus.ACTIVE,
+        )
+
+        db.add(new_refresh_record)
+
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+        return (
+            new_access_token,
+            new_refresh_token,
+        )
 
 def create_login_tokens(
         user_id: int,
