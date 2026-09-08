@@ -175,20 +175,24 @@ def rotate_refresh_token(
         raise InvalidTokenError()
 
     if token_record.status == RefreshTokenStatus.USED:
-        revoke_token_family(
-            family_id=token_record.family_id,
-            db=db
-        )
+
+        logger.warning(
+                "Refresh token reuse detected family_id=%s",
+                token_record.family_id,
+                )
         try:
+            revoke_token_family(
+                family_id=token_record.family_id,
+                db=db
+            )
+
             db.commit()
         except Exception:
             db.rollback()
+            raise
+
         raise RefreshTokenReuseDetectedError()
 
-    logger.warning(
-    "Refresh token reuse detected family_id=%s",
-    token_record.family_id,
-    )
 
     if token_record.status != RefreshTokenStatus.ACTIVE:
         raise InvalidTokenError()
@@ -203,7 +207,11 @@ def rotate_refresh_token(
                 status = RefreshTokenStatus.USED,
                 used_at = now)
                 )
-    result = db.execute(stmt)
+    try:
+        result = db.execute(stmt)
+    except Exception:
+        db.rollback()
+        raise
 
     if result.rowcount != 1:
         db.rollback()
@@ -217,52 +225,58 @@ def rotate_refresh_token(
             raise InvalidTokenError()
 
         if current_record.status == RefreshTokenStatus.USED:
-            revoke_token_family(
-                family_id=current_record.family_id,
-                db=db
-            )
 
+            logger.warning(
+                            "Refresh token reuse detected family_id=%s",
+                            current_record.family_id,
+                            )
             try:
+                revoke_token_family(
+                    family_id=current_record.family_id,
+                    db=db
+                )
+
                 db.commit()
             except Exception:
                 db.rollback()
                 raise
 
             raise RefreshTokenReuseDetectedError()
-        
+            
         raise InvalidTokenError()
 
     if result.rowcount == 1:
-        new_access_token = create_access_token(
-            user_id=token_record.user_id
-        )
-
-        (
-            new_refresh_token,
-            new_jti,
-            new_expires_at,
-        ) = create_refresh_token(
-            user_id=token_record.user_id,
-            family_id=token_record.family_id,
-        )
-
-        new_refresh_record = RefreshToken(
-            jti=new_jti,
-            user_id=token_record.user_id,
-            family_id=token_record.family_id,
-            expires_at=new_expires_at,
-            status=RefreshTokenStatus.ACTIVE,
-        )
-
-        db.add(new_refresh_record)
-
         try:
+            new_access_token = create_access_token(
+                user_id=token_record.user_id
+            )
+
+            (
+                new_refresh_token,
+                new_jti,
+                new_expires_at,
+            ) = create_refresh_token(
+                user_id=token_record.user_id,
+                family_id=token_record.family_id,
+            )
+
+            new_refresh_record = RefreshToken(
+                jti=new_jti,
+                user_id=token_record.user_id,
+                family_id=token_record.family_id,
+                expires_at=new_expires_at,
+                status=RefreshTokenStatus.ACTIVE,
+            )
+
+            db.add(new_refresh_record)
+
+                
             db.commit()
         except Exception:
             db.rollback()
             raise
 
-        return (
+    return (
             new_access_token,
             new_refresh_token,
         )
