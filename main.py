@@ -10,7 +10,7 @@ from exception_handlers import (
     invalid_token_handler,
     admin_access_required_handler,
     compromised_password_handler,
-    reuse_refresh_token_handler
+    refresh_token_reuse_handler
     
 )
 from exceptions.project import ProjectNotFoundError
@@ -84,5 +84,5 @@ app.add_exception_handler(
 
 app.add_exception_handler(
     RefreshTokenReuseDetectedError,
-    reuse_refresh_token_handler
+    refresh_token_reuse_handler
 )

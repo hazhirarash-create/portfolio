@@ -172,6 +172,11 @@ def rotate_refresh_token(
         raise InvalidTokenError()
 
     if token_record.status == RefreshTokenStatus.REVOKED:
+
+        logger.warning(
+            "Refresh token reuse detected family_id=%s",
+            token_record.family_id
+            )
         raise InvalidTokenError()
 
     if token_record.status == RefreshTokenStatus.USED:

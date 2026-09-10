@@ -14,7 +14,12 @@ def get_project_by_id(project_id:int, db:Session):
 def get_projects(page: int, limit:int, db:Session):
     total = (db.query(Project).filter_by(is_published=True).count())
     offset = ((page - 1) * limit)
-    projects =( db.query(Project).filter_by(is_published=True).order_by(Project.created_at.desc()).limit(limit).offset(offset).all())
+    projects =( db.query(Project)
+               .filter_by(is_published=True)
+               .order_by(Project.created_at.desc())
+               .limit(limit)
+               .offset(offset)
+               .all())
     return projects, total
 
 

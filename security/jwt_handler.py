@@ -57,7 +57,7 @@ def create_refresh_token(
         family_id: str
 ) -> tuple[str, str, datetime]:
 
-    jti = str(uuid.uuid4)
+    jti = str(uuid.uuid4())
 
     expire_at = (
         datetime.now(timezone.utc)
