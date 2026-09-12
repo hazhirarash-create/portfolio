@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 
 from database import get_db
-from exceptions.user import (InvalidTokenError,
+from exceptions.user_exceptions import (InvalidTokenError,
                              InactiveUserError,
                              AdminAccessRequiredError)
 from models.models import User

@@ -1,4 +1,5 @@
 import pytest
+from pytest import MonkeyPatch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -7,7 +8,7 @@ from database import Base
 import models.models
 from models.models import User, RefreshToken, RefreshTokenStatus
 from security.jwt_handler import create_refresh_token
-from services import user_service
+
 
 
 @pytest.fixture
@@ -79,8 +80,3 @@ def active_refresh_token(db_session, test_user):
 def fail_create_refresh_token(user_id, family_id):
     raise RuntimeError("Simulated refresh creation failure")
 
-monkeypatch.setattr(
-    user_service,
-    "create_refresh_token",
-    fail_create_refresh_token,
-)

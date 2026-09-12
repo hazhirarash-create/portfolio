@@ -1,17 +1,19 @@
 from fastapi import Request, status
 from fastapi.responses import JSONResponse
 
-from exceptions.project import ProjectNotFoundError
+from exceptions.project_exceptions import ProjectNotFoundError
 
-from exceptions.user import (UsernameAlreadyExistsError,
+from exceptions.user_exceptions import (UsernameAlreadyExistsError,
                              EmailAlreadyExistsError,
                              UserAlreadyExistsError,
-                             InactiveUserError,
+                             )
+from exceptions.auth_exceptions import (InactiveUserError,
                              InvalidCredentialsError,
                              InvalidTokenError,
                              AdminAccessRequiredError,
                              CompromisedPasswordError,
-                             RefreshTokenReuseDetectedError)
+                             RefreshTokenReuseDetectedError
+                             )
 
 
 async def project_not_found_handler(

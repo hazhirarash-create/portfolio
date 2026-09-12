@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import jwt
-from exceptions.user import InvalidTokenError
+from exceptions.auth_exceptions import InvalidTokenError
 from core.config import (ACCESS_TOKEN_EXPIRE_MINUTES,
                          SECRET_KEY,
                          ALGORITHM,

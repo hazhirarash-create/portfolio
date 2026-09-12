@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 from models.models import Project
 from schemas.project import ProjectCreate, ProjectUpdate
-from exceptions.project import ProjectNotFoundError
+from exceptions.project_exceptions import ProjectNotFoundError
 
 
 def get_project_by_id(project_id:int, db:Session):

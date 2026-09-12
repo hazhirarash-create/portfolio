@@ -1,6 +1,4 @@
 from pwdlib import PasswordHash
-import hashlib
-import requests
 
 
 password_hash = PasswordHash.recommended()

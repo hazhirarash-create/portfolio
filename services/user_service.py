@@ -7,14 +7,16 @@ from schemas.user import UserCreate, UserLogin
 from security.password import (hash_password,
                                DUMMY_PASSWORD_HASH,
                                verify_password)
-from exceptions.user import (CompromisedPasswordError, UsernameAlreadyExistsError,
+from exceptions.user_exceptions import (UsernameAlreadyExistsError,
                             EmailAlreadyExistsError,
                             UserAlreadyExistsError,
-                            InvalidCredentialsError,
+                            )
+from exceptions.auth_exceptions import (InvalidCredentialsError,
                             InactiveUserError,
                             CompromisedPasswordError,
                             InvalidTokenError,
-                            RefreshTokenReuseDetectedError)
+                            RefreshTokenReuseDetectedError
+                            )
 from security.password_breach import check_pwned_password
 import logging
 from security.jwt_handler import (decode_refresh_token,

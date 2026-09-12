@@ -13,18 +13,20 @@ from exception_handlers import (
     refresh_token_reuse_handler
     
 )
-from exceptions.project import ProjectNotFoundError
-from exceptions.user import (
+from exceptions.project_exceptions import ProjectNotFoundError
+from exceptions.user_exceptions import (
     EmailAlreadyExistsError,
     UsernameAlreadyExistsError,
     UserAlreadyExistsError,
+)
+from exceptions.auth_exceptions import(
     InactiveUserError,
     InvalidCredentialsError,
     InvalidTokenError,
     AdminAccessRequiredError,
     CompromisedPasswordError,
     RefreshTokenReuseDetectedError
-)
+    )
 from routers import projects, users
 
 from core.logging_config import setup_logging
