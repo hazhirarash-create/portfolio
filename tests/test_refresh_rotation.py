@@ -12,6 +12,8 @@ from exceptions.auth_exceptions import (
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import update
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 
 from tests.conftest import active_refresh_token, db_session, test_user
 
@@ -535,3 +537,109 @@ def test_failed_claim_detects_used_token_and_revokes_family(
         )
 
         assert family_token_count == 2
+
+
+def test_concurrent_rotation_allows_only_one_success(
+    db_session,
+    active_refresh_token,
+    monkeypatch,
+):
+    test_engine = db_session.get_bind()
+
+    original_token = active_refresh_token["token"]
+    original_jti = active_refresh_token["jti"]
+    family_id = active_refresh_token["family_id"]
+
+    barrier = Barrier(2, timeout=5)
+
+    real_get_refresh_token = (
+        user_service.get_refresh_token_by_jti
+    )
+
+    def get_refresh_token_with_barrier(jti, db):
+        record = real_get_refresh_token(
+            jti=jti,
+            db=db,
+        )
+
+        if not db.info.get("initial_read_synchronized", False):
+            assert record is not None
+            assert record.status == RefreshTokenStatus.ACTIVE
+
+            db.info["initial_read_synchronized"] = True
+            barrier.wait()
+
+        return record
+
+    monkeypatch.setattr(
+        user_service,
+        "get_refresh_token_by_jti",
+        get_refresh_token_with_barrier,
+    )
+
+    def attempt_rotation():
+        with Session(bind=test_engine) as worker_db:
+            try:
+                tokens = user_service.rotate_refresh_token(
+                    refresh_token=original_token,
+                    db=worker_db,
+                )
+
+            except RefreshTokenReuseDetectedError:
+                assert not worker_db.in_transaction()
+                return "reuse", None
+
+            else:
+                assert not worker_db.in_transaction()
+                return "success", tokens
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first_future = executor.submit(attempt_rotation)
+        second_future = executor.submit(attempt_rotation)
+
+        first_result = first_future.result(timeout=15)
+        second_result = second_future.result(timeout=15)
+
+    results = [first_result, second_result]
+
+    outcomes = [result[0] for result in results]
+    assert sorted(outcomes) == ["reuse", "success"]
+
+    successful_tokens = [
+        tokens
+        for outcome, tokens in results
+        if outcome == "success"
+    ]
+
+    assert len(successful_tokens) == 1
+
+    _, issued_refresh_token = successful_tokens[0]
+    issued_payload = decode_refresh_token(issued_refresh_token)
+
+    assert issued_payload["jti"] != original_jti
+    assert issued_payload["family_id"] == family_id
+
+    with Session(bind=test_engine) as verification_db:
+        family_records = (
+            verification_db.query(RefreshToken)
+            .filter(RefreshToken.family_id == family_id)
+            .all()
+        )
+
+        assert len(family_records) == 2
+
+        records_by_jti = {
+            record.jti: record
+            for record in family_records
+        }
+
+        token_a = records_by_jti[original_jti]
+        token_b = records_by_jti[issued_payload["jti"]]
+
+        assert token_a.status == RefreshTokenStatus.USED
+        assert token_a.used_at is not None
+        assert token_a.revoked_at is None
+
+        assert token_b.status == RefreshTokenStatus.REVOKED
+        assert token_b.revoked_at is not None
+        assert token_b.used_at is None
