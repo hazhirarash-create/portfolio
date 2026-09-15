@@ -72,10 +72,6 @@ def login(
         db=db
     )
 
-    access_token = create_access_token(
-        user_id=user.id
-    )
-
     (access_token, refresh_token) = create_login_tokens(
         user_id=user.id,
         db=db
