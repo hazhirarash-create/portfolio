@@ -1,5 +1,5 @@
 from asyncio.log import logger
-from sqlalchemy import update
+from sqlalchemy import update, text
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from models.models import User, RefreshToken, RefreshTokenStatus
@@ -152,109 +152,89 @@ def authenticate_user(
 
     return user
 
-def rotate_refresh_token(
-        refresh_token: str,
-        db: Session
-        ) -> tuple[str, str]: 
-
-    payload = decode_refresh_token(refresh_token)
-    
-    token_record = get_refresh_token_by_jti(
-        jti=payload["jti"],
-        db=db
-    )
-
-    if token_record is None:
-        raise InvalidTokenError()
-
-    if token_record.user_id != payload["user_id"]:
-        raise InvalidTokenError()
-
-    if token_record.family_id != payload["family_id"]:
-        raise InvalidTokenError()
-
-    if token_record.status == RefreshTokenStatus.REVOKED:
-
-        logger.warning("Revoked refresh token rejected family_id=%s",
-                       token_record.family_id
-                       )
-        raise InvalidTokenError()
-
-    if token_record.status == RefreshTokenStatus.USED:
-
-        logger.warning(
-                "Refresh token reuse detected family_id=%s",
-                token_record.family_id,
-                )
-        try:
-            revoke_token_family(
-                family_id=token_record.family_id,
-                db=db
-            )
-
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
-
-        raise RefreshTokenReuseDetectedError()
-
-
-    if token_record.status != RefreshTokenStatus.ACTIVE:
-        raise InvalidTokenError()
-
-    now = datetime.now(timezone.utc)
-
-    stmt = (update(RefreshToken)
-            .where(
-                RefreshToken.id == token_record.id,
-                RefreshToken.status == RefreshTokenStatus.ACTIVE)
-            .values(
-                status = RefreshTokenStatus.USED,
-                used_at = now)
-                )
+def begin_sqlite_write_transaction(db:Session) -> None:
+    if db.in_transaction():
+        raise RuntimeError(
+            "A write transaction requires a session "
+            "without an active transaction"
+        )
     try:
-        result = db.execute(stmt)
+        db.execute(text("BEGIN IMMEDIATE"))
     except Exception:
         db.rollback()
         raise
 
-    if result.rowcount != 1:
-        db.rollback()
+def rotate_refresh_token(
+    refresh_token: str,
+    db: Session,
+) -> tuple[str, str]:
+    payload = decode_refresh_token(refresh_token)
 
-        current_record = get_refresh_token_by_jti(
+    reuse_detected = False
+    tokens: tuple[str, str] | None = None
+
+    begin_sqlite_write_transaction(db=db)
+
+    try:
+        token_record = get_refresh_token_by_jti(
             jti=payload["jti"],
-            db=db
+            db=db,
         )
 
-        if current_record is None:
+        if token_record is None:
             raise InvalidTokenError()
 
-        if current_record.status == RefreshTokenStatus.USED:
+        if token_record.user_id != payload["user_id"]:
+            raise InvalidTokenError()
+
+        if token_record.family_id != payload["family_id"]:
+            raise InvalidTokenError()
+
+        if token_record.status == RefreshTokenStatus.REVOKED:
+            logger.warning(
+                "Revoked refresh token rejected family_id=%s",
+                token_record.family_id,
+            )
+            raise InvalidTokenError()
+
+        if token_record.status == RefreshTokenStatus.USED:
+            reuse_detected = True
 
             logger.warning(
-                            "Refresh token reuse detected family_id=%s",
-                            current_record.family_id,
-                            )
-            try:
-                revoke_token_family(
-                    family_id=current_record.family_id,
-                    db=db
+                "Refresh token reuse detected family_id=%s",
+                token_record.family_id,
+            )
+
+            revoke_token_family(
+                family_id=token_record.family_id,
+                db=db,
+            )
+
+        elif token_record.status == RefreshTokenStatus.ACTIVE:
+            now = datetime.now(timezone.utc)
+
+            stmt = (
+                update(RefreshToken)
+                .where(
+                    RefreshToken.id == token_record.id,
+                    RefreshToken.status == RefreshTokenStatus.ACTIVE,
+                )
+                .values(
+                    status=RefreshTokenStatus.USED,
+                    used_at=now,
+                )
+            )
+
+            result = db.execute(stmt)
+
+            if result.rowcount != 1:
+                raise RuntimeError(
+                    "Refresh token claim failed "
+                    "inside the protected write transaction"
                 )
 
-                db.commit()
-            except Exception:
-                db.rollback()
-                raise
-
-            raise RefreshTokenReuseDetectedError()
-            
-        raise InvalidTokenError()
-
-    if result.rowcount == 1:
-        try:
             new_access_token = create_access_token(
-                user_id=token_record.user_id
+                user_id=token_record.user_id,
             )
 
             (
@@ -276,16 +256,29 @@ def rotate_refresh_token(
 
             db.add(new_refresh_record)
 
-                
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise
+            tokens = (
+                new_access_token,
+                new_refresh_token,
+            )
 
-    return (
-            new_access_token,
-            new_refresh_token,
-        )
+        else:
+            raise InvalidTokenError()
+
+        if not reuse_detected and tokens is None:
+            raise RuntimeError(
+                "Refresh rotation produced no token pair"
+            )
+
+        db.commit()
+
+    except Exception:
+        db.rollback()
+        raise
+
+    if reuse_detected:
+        raise RefreshTokenReuseDetectedError()
+
+    return tokens
 
 def create_login_tokens(
         user_id: int,

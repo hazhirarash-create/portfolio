@@ -341,202 +341,180 @@ def test_reuse_rolls_back_when_security_commit_fails(
 
         assert family_token_count == 2
 
-def test_failed_claim_rejects_token_revoked_before_update(
+def test_rotation_rejects_existing_transaction_without_ending_it(
+    db_session,
+    active_refresh_token,
+):
+    original_jti = active_refresh_token["jti"]
+
+    token_record = (
+        db_session.query(RefreshToken)
+        .filter(RefreshToken.jti == original_jti)
+        .one()
+    )
+
+    assert token_record.status == RefreshTokenStatus.ACTIVE
+
+    caller_transaction = db_session.get_transaction()
+    assert caller_transaction is not None
+
+    try:
+        token_record.status = RefreshTokenStatus.REVOKED
+        db_session.flush()
+
+        with pytest.raises(
+            RuntimeError,
+            match="without an active transaction",
+        ):
+            user_service.rotate_refresh_token(
+                refresh_token=active_refresh_token["token"],
+                db=db_session,
+            )
+
+        assert db_session.in_transaction()
+        assert db_session.get_transaction() is caller_transaction
+
+        db_session.refresh(token_record)
+
+        assert token_record.status == RefreshTokenStatus.REVOKED
+
+    finally:
+        db_session.rollback()
+
+    with Session(bind=db_session.get_bind()) as verification_db:
+        persisted_record = (
+            verification_db.query(RefreshToken)
+            .filter(RefreshToken.jti == original_jti)
+            .one()
+        )
+
+        assert persisted_record.status == RefreshTokenStatus.ACTIVE
+
+
+def test_concurrent_reuse_and_rotation_leave_no_active_tokens(
     db_session,
     active_refresh_token,
     monkeypatch,
 ):
-    original_jti = active_refresh_token["jti"]
+    test_engine = db_session.get_bind()
+
+    token_a = active_refresh_token["token"]
+    jti_a = active_refresh_token["jti"]
     family_id = active_refresh_token["family_id"]
 
-    real_execute = db_session.execute
-    claim_rowcounts = []
-    state_change_simulated = False
-
-    def execute_with_revocation(statement, *args, **kwargs):
-        nonlocal state_change_simulated
-
-        if (
-            getattr(statement, "is_update", False)
-            and not state_change_simulated
-        ):
-            state_change_simulated = True
-
-            real_execute(
-                update(RefreshToken)
-                .where(RefreshToken.jti == original_jti)
-                .values(
-                    status=RefreshTokenStatus.REVOKED,
-                    revoked_at=datetime.now(timezone.utc),
-                )
-            )
-            db_session.commit()
-
-            result = real_execute(statement, *args, **kwargs)
-            claim_rowcounts.append(result.rowcount)
-
-            return result
-
-        return real_execute(statement, *args, **kwargs)
-
-    def unexpected_family_revocation(*args, **kwargs):
-        pytest.fail("REVOKED token must not trigger family revocation")
-
-    monkeypatch.setattr(
-        db_session,
-        "execute",
-        execute_with_revocation,
+    _, token_b = user_service.rotate_refresh_token(
+        refresh_token=token_a,
+        db=db_session,
     )
+
+    payload_b = decode_refresh_token(token_b)
+    jti_b = payload_b["jti"]
+
+    barrier = Barrier(2, timeout=5)
+
+    real_begin_write_transaction = (
+        user_service.begin_sqlite_write_transaction
+    )
+
+    def begin_write_transaction_with_barrier(db):
+        assert not db.in_transaction()
+        barrier.wait()
+        real_begin_write_transaction(db=db)
 
     monkeypatch.setattr(
         user_service,
-        "revoke_token_family",
-        unexpected_family_revocation,
+        "begin_sqlite_write_transaction",
+        begin_write_transaction_with_barrier,
     )
 
-    with pytest.raises(InvalidTokenError):
-        user_service.rotate_refresh_token(
-            refresh_token=active_refresh_token["token"],
-            db=db_session,
+    def reuse_token_a():
+        with Session(bind=test_engine) as worker_db:
+            with pytest.raises(RefreshTokenReuseDetectedError):
+                user_service.rotate_refresh_token(
+                    refresh_token=token_a,
+                    db=worker_db,
+                )
+
+            assert not worker_db.in_transaction()
+
+    def rotate_token_b():
+        with Session(bind=test_engine) as worker_db:
+            try:
+                tokens = user_service.rotate_refresh_token(
+                    refresh_token=token_b,
+                    db=worker_db,
+                )
+
+            except InvalidTokenError:
+                assert not worker_db.in_transaction()
+                return "rejected", None
+
+            else:
+                assert not worker_db.in_transaction()
+                return "success", tokens
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        reuse_future = executor.submit(reuse_token_a)
+        rotation_future = executor.submit(rotate_token_b)
+
+        reuse_future.result(timeout=15)
+        rotation_outcome, issued_tokens = (
+            rotation_future.result(timeout=15)
         )
 
-    assert state_change_simulated
-    assert claim_rowcounts == [0]
-
-    with Session(bind=db_session.get_bind()) as verification_db:
-        record = (
-            verification_db.query(RefreshToken)
-            .filter(RefreshToken.jti == original_jti)
-            .one()
-        )
-
-        assert record.status == RefreshTokenStatus.REVOKED
-        assert record.revoked_at is not None
-        assert record.used_at is None
-
-        family_token_count = (
+    with Session(bind=test_engine) as verification_db:
+        family_records = (
             verification_db.query(RefreshToken)
             .filter(RefreshToken.family_id == family_id)
-            .count()
+            .all()
         )
 
-        assert family_token_count == 1
+        records_by_jti = {
+            record.jti: record
+            for record in family_records
+        }
 
+        record_a = records_by_jti[jti_a]
+        record_b = records_by_jti[jti_b]
 
-def test_failed_claim_detects_used_token_and_revokes_family(
-    db_session,
-    test_user,
-    active_refresh_token,
-    monkeypatch,
-):
-    original_jti = active_refresh_token["jti"]
-    family_id = active_refresh_token["family_id"]
+        assert record_a.status == RefreshTokenStatus.USED
+        assert record_a.used_at is not None
+        assert record_a.revoked_at is None
 
-    real_execute = db_session.execute
+        for record in family_records:
+            assert record.status != RefreshTokenStatus.ACTIVE
 
-    claim_rowcounts = []
-    state_change_simulated = False
-    created_token_jtis = []
+        if rotation_outcome == "rejected":
+            assert issued_tokens is None
+            assert len(family_records) == 2
 
-    def execute_with_completed_rotation(
-        statement,
-        *args,
-        **kwargs,
-    ):
-        nonlocal state_change_simulated
+            assert record_b.status == RefreshTokenStatus.REVOKED
+            assert record_b.revoked_at is not None
+            assert record_b.used_at is None
 
-        if (
-            getattr(statement, "is_update", False)
-            and not state_change_simulated
-        ):
-            state_change_simulated = True
+        else:
+            assert rotation_outcome == "success"
+            assert issued_tokens is not None
+            assert len(family_records) == 3
 
-            _, new_jti, new_expires_at = (
-                user_service.create_refresh_token(
-                    user_id=test_user.id,
-                    family_id=family_id,
-                )
-            )
+            assert record_b.status == RefreshTokenStatus.USED
+            assert record_b.used_at is not None
+            assert record_b.revoked_at is None
 
-            real_execute(
-                update(RefreshToken)
-                .where(RefreshToken.jti == original_jti)
-                .values(
-                    status=RefreshTokenStatus.USED,
-                    used_at=datetime.now(timezone.utc),
-                )
-            )
+            _, token_c = issued_tokens
+            payload_c = decode_refresh_token(token_c)
 
-            replacement_record = RefreshToken(
-                jti=new_jti,
-                user_id=test_user.id,
-                family_id=family_id,
-                expires_at=new_expires_at,
-                status=RefreshTokenStatus.ACTIVE,
-            )
+            assert payload_c["family_id"] == family_id
+            assert payload_c["jti"] not in (jti_a, jti_b)
 
-            db_session.add(replacement_record)
-            db_session.commit()
+            record_c = records_by_jti[payload_c["jti"]]
 
-            created_token_jtis.append(new_jti)
+            assert record_c.status == RefreshTokenStatus.REVOKED
+            assert record_c.revoked_at is not None
+            assert record_c.used_at is None
 
-            result = real_execute(statement, *args, **kwargs)
-            claim_rowcounts.append(result.rowcount)
-
-            return result
-
-        return real_execute(statement, *args, **kwargs)
-
-    monkeypatch.setattr(
-        db_session,
-        "execute",
-        execute_with_completed_rotation,
-    )
-
-    with pytest.raises(RefreshTokenReuseDetectedError):
-        user_service.rotate_refresh_token(
-            refresh_token=active_refresh_token["token"],
-            db=db_session,
-        )
-
-    assert state_change_simulated
-    assert claim_rowcounts == [0]
-    assert len(created_token_jtis) == 1
-    assert not db_session.in_transaction()
-
-    replacement_jti = created_token_jtis[0]
-
-    with Session(bind=db_session.get_bind()) as verification_db:
-        token_a = (
-            verification_db.query(RefreshToken)
-            .filter(RefreshToken.jti == original_jti)
-            .one()
-        )
-
-        token_b = (
-            verification_db.query(RefreshToken)
-            .filter(RefreshToken.jti == replacement_jti)
-            .one()
-        )
-
-        assert token_a.status == RefreshTokenStatus.USED
-        assert token_a.used_at is not None
-        assert token_a.revoked_at is None
-
-        assert token_b.status == RefreshTokenStatus.REVOKED
-        assert token_b.revoked_at is not None
-        assert token_b.used_at is None
-
-        assert token_b.family_id == family_id
-        assert token_b.user_id == token_a.user_id
-
-        family_token_count = (
-            verification_db.query(RefreshToken)
-            .filter(RefreshToken.family_id == family_id)
-            .count()
-        )
-
-        assert family_token_count == 2
+            assert record_c.user_id == record_b.user_id
+            assert payload_c["user_id"] == record_c.user_id
 
 
 def test_concurrent_rotation_allows_only_one_success(
@@ -552,29 +530,21 @@ def test_concurrent_rotation_allows_only_one_success(
 
     barrier = Barrier(2, timeout=5)
 
-    real_get_refresh_token = (
-        user_service.get_refresh_token_by_jti
+    real_begin_write_transaction = (
+        user_service.begin_sqlite_write_transaction
     )
 
-    def get_refresh_token_with_barrier(jti, db):
-        record = real_get_refresh_token(
-            jti=jti,
-            db=db,
-        )
+    def begin_write_transaction_with_barrier(db):
+        assert not db.in_transaction()
 
-        if not db.info.get("initial_read_synchronized", False):
-            assert record is not None
-            assert record.status == RefreshTokenStatus.ACTIVE
+        barrier.wait()
 
-            db.info["initial_read_synchronized"] = True
-            barrier.wait()
-
-        return record
+        real_begin_write_transaction(db=db)
 
     monkeypatch.setattr(
         user_service,
-        "get_refresh_token_by_jti",
-        get_refresh_token_with_barrier,
+        "begin_sqlite_write_transaction",
+        begin_write_transaction_with_barrier,
     )
 
     def attempt_rotation():
@@ -643,3 +613,6 @@ def test_concurrent_rotation_allows_only_one_success(
         assert token_b.status == RefreshTokenStatus.REVOKED
         assert token_b.revoked_at is not None
         assert token_b.used_at is None
+
+        assert token_b.user_id == token_a.user_id
+        assert issued_payload["user_id"] == token_b.user_id
