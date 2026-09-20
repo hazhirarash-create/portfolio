@@ -70,6 +70,21 @@ def revoke_token_family(
         token.status = RefreshTokenStatus.REVOKED
         token.revoked_at = now
 
+def validate_refresh_token_record(
+    token_record: RefreshToken | None,
+    payload: dict,
+) -> RefreshToken:
+    if token_record is None:
+        raise InvalidTokenError()
+
+    if token_record.user_id != payload["user_id"]:
+        raise InvalidTokenError()
+
+    if token_record.family_id != payload["family_id"]:
+        raise InvalidTokenError()
+
+    return token_record
+
 def create_user(
     user_data: UserCreate,
     db: Session
@@ -181,14 +196,10 @@ def rotate_refresh_token(
             db=db,
         )
 
-        if token_record is None:
-            raise InvalidTokenError()
-
-        if token_record.user_id != payload["user_id"]:
-            raise InvalidTokenError()
-
-        if token_record.family_id != payload["family_id"]:
-            raise InvalidTokenError()
+        token_record = validate_refresh_token_record(
+            token_record=token_record,
+            payload=payload
+        )
 
         if token_record.status == RefreshTokenStatus.REVOKED:
             logger.warning(
@@ -311,3 +322,33 @@ def create_login_tokens(
 
     return(access_token,
            refresh_token)
+
+def logout_refresh_session(
+    refresh_token: str,
+    db: Session,
+) -> None:
+    payload = decode_refresh_token(refresh_token)
+
+    begin_sqlite_write_transaction(db=db)
+
+    try:
+        token_record = get_refresh_token_by_jti(
+            jti=payload["jti"],
+            db=db,
+        )
+
+        token_record = validate_refresh_token_record(
+            token_record=token_record,
+            payload=payload,
+        )
+
+        revoke_token_family(
+            family_id=token_record.family_id,
+            db=db,
+        )
+
+        db.commit()
+
+    except Exception:
+        db.rollback()
+        raise
