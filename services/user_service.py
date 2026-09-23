@@ -85,6 +85,18 @@ def validate_refresh_token_record(
 
     return token_record
 
+def begin_sqlite_write_transaction(db:Session) -> None:
+    if db.in_transaction():
+        raise RuntimeError(
+            "A write transaction requires a session "
+            "without an active transaction"
+        )
+    try:
+        db.execute(text("BEGIN IMMEDIATE"))
+    except Exception:
+        db.rollback()
+        raise
+
 def create_user(
     user_data: UserCreate,
     db: Session
@@ -167,17 +179,6 @@ def authenticate_user(
 
     return user
 
-def begin_sqlite_write_transaction(db:Session) -> None:
-    if db.in_transaction():
-        raise RuntimeError(
-            "A write transaction requires a session "
-            "without an active transaction"
-        )
-    try:
-        db.execute(text("BEGIN IMMEDIATE"))
-    except Exception:
-        db.rollback()
-        raise
 
 def rotate_refresh_token(
     refresh_token: str,
@@ -327,6 +328,7 @@ def logout_refresh_session(
     refresh_token: str,
     db: Session,
 ) -> None:
+    
     payload = decode_refresh_token(refresh_token)
 
     begin_sqlite_write_transaction(db=db)

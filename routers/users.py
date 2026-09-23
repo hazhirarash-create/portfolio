@@ -1,4 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import (APIRouter,
+                     Depends,
+                     HTTPException,
+                     status,
+                     Response)
 from sqlalchemy.orm import Session
 from pydantic import ValidationError
 
@@ -6,7 +10,6 @@ from database import get_db
 from models.models import User
 from schemas.user import (UserCreate,
                           UserResponse,
-                          TokenResponse,
                           UserLogin,
                           TokenPairResponse,
                           RefreshTokenRequest
@@ -14,7 +17,8 @@ from schemas.user import (UserCreate,
 from services.user_service import (create_user,
                                    authenticate_user,
                                    rotate_refresh_token,
-                                   create_login_tokens
+                                   create_login_tokens,
+                                   logout_refresh_session
                                    )
 
 from security.jwt_handler import create_access_token
@@ -112,3 +116,20 @@ def refresh_tokens(
         refresh_token= new_refresh_token,
         token_type= "bearer"
     )
+
+@router.post(
+    "/logout",
+    status_code=status.HTTP_204_NO_CONTENT
+)
+def logout(
+    token_data: RefreshTokenRequest,
+    db: Session = Depends(get_db)
+) -> None:
+    
+    logout_refresh_session(
+        refresh_token=token_data.refresh_token,
+        db=db
+    )
+    return Response(
+        status_code=status.HTTP_204_NO_CONTENT
+        )

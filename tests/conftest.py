@@ -1,6 +1,11 @@
 import pytest
 from pytest import MonkeyPatch
-
+from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+import pytest
+from database import get_db
+from main import app
+from models.models import RefreshToken, RefreshTokenStatus
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import uuid
@@ -79,4 +84,21 @@ def active_refresh_token(db_session, test_user):
 
 def fail_create_refresh_token(user_id, family_id):
     raise RuntimeError("Simulated refresh creation failure")
+
+@pytest.fixture
+def http_client(db_session, monkeypatch):
+    test_engine = db_session.get_bind()
+
+    def override_get_db():
+        with Session(bind=test_engine) as request_db:
+            yield request_db
+
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        get_db,
+        override_get_db,
+    )
+
+    with TestClient(app) as client:
+        yield client
 

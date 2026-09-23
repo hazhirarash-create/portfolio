@@ -1,4 +1,3 @@
-from sqlalchemy import inspect
 from models.models import User, RefreshToken, RefreshTokenStatus
 import pytest
 from sqlalchemy import select
@@ -10,8 +9,6 @@ from exceptions.auth_exceptions import (
     RefreshTokenReuseDetectedError,
 )
 import uuid
-from datetime import datetime, timezone
-from sqlalchemy import update
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 

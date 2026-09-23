@@ -1,32 +1,6 @@
-import pytest
-
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
-
-from database import get_db
-from main import app
 from models.models import RefreshToken, RefreshTokenStatus
 from security.jwt_handler import decode_refresh_token
-
-
-@pytest.fixture
-def http_client(db_session, monkeypatch):
-
-    test_engine = db_session.get_bind()
-
-    def override_get_db():
-
-        with Session(bind=test_engine) as request_db:
-            yield request_db
-
-    monkeypatch.setitem(
-        app.dependency_overrides,
-        get_db,
-        override_get_db,
-    )
-
-    with TestClient(app) as client:
-        yield client
 
 
 def test_refresh_reuse_response_and_revocation(
