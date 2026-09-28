@@ -10,7 +10,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import uuid
 from database import Base
-import models.models
 from models.models import User, RefreshToken, RefreshTokenStatus
 from security.jwt_handler import create_refresh_token
 
