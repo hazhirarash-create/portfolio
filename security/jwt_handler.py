@@ -17,6 +17,7 @@ def create_access_token(user_id: int) -> str:
 
     payload = {
         "sub": str(user_id),
+        "type": "access",
         "exp": expire
     }
 
@@ -40,6 +41,9 @@ def decode_access_token(token : str) -> int:
         subject = payload.get("sub")
 
         if subject is None:
+            raise InvalidTokenError()
+
+        if payload.get("type") != "access":
             raise InvalidTokenError()
 
         user_id = int(subject)
@@ -94,16 +98,16 @@ def decode_refresh_token(token:str) -> dict:
         family_id = payload.get("family_id")
 
         if token_type != "refresh":
-            raise InvalidTokenError
+            raise InvalidTokenError()
 
         if subject is None:
-            raise InvalidTokenError
+            raise InvalidTokenError()
 
         if jti is None:
-            raise InvalidTokenError
+            raise InvalidTokenError()
 
         if family_id is None:
-            raise InvalidTokenError
+            raise InvalidTokenError()
 
         user_id = int(subject)
 
