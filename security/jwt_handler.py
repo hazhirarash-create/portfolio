@@ -35,15 +35,23 @@ def decode_access_token(token : str) -> int:
         payload = jwt.decode(
             token,
             SECRET_KEY,
-            algorithms=[ALGORITHM]
+            algorithms=[ALGORITHM],
+            options={
+                "require": [
+                "exp",
+                "sub",
+                "type",
+                ],
+            },
         )
 
         subject = payload.get("sub")
+        token_type = payload.get("type")
 
         if subject is None:
             raise InvalidTokenError()
 
-        if payload.get("type") != "access":
+        if token_type != "access":
             raise InvalidTokenError()
 
         user_id = int(subject)
@@ -89,7 +97,16 @@ def decode_refresh_token(token:str) -> dict:
         payload = jwt.decode(
             token,
             SECRET_KEY,
-            algorithms=[ALGORITHM]
+            algorithms=[ALGORITHM],
+            options={
+                "require":[
+                    "sub",
+                    "type",
+                    "jti",
+                    "family_id",
+                    "exp"
+                ]
+            }
         )
 
         token_type = payload.get("type")
@@ -100,13 +117,13 @@ def decode_refresh_token(token:str) -> dict:
         if token_type != "refresh":
             raise InvalidTokenError()
 
-        if subject is None:
+        if not isinstance(subject, str) or not subject:
             raise InvalidTokenError()
 
-        if jti is None:
+        if not isinstance(jti, str) or not jti:
             raise InvalidTokenError()
 
-        if family_id is None:
+        if not isinstance(family_id, str) or not family_id:
             raise InvalidTokenError()
 
         user_id = int(subject)
