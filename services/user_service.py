@@ -74,6 +74,7 @@ def validate_refresh_token_record(
     token_record: RefreshToken | None,
     payload: dict,
 ) -> RefreshToken:
+    
     if token_record is None:
         raise InvalidTokenError()
 
@@ -188,6 +189,7 @@ def rotate_refresh_token(
 
     reuse_detected = False
     tokens: tuple[str, str] | None = None
+    inactive_user_detected = False
 
     begin_sqlite_write_transaction(db=db)
 
@@ -199,7 +201,7 @@ def rotate_refresh_token(
 
         token_record = validate_refresh_token_record(
             token_record=token_record,
-            payload=payload
+            payload=payload,
         )
 
         if token_record.status == RefreshTokenStatus.REVOKED:
@@ -223,60 +225,87 @@ def rotate_refresh_token(
             )
 
         elif token_record.status == RefreshTokenStatus.ACTIVE:
-            now = datetime.now(timezone.utc)
-
-            stmt = (
-                update(RefreshToken)
-                .where(
-                    RefreshToken.id == token_record.id,
-                    RefreshToken.status == RefreshTokenStatus.ACTIVE,
-                )
-                .values(
-                    status=RefreshTokenStatus.USED,
-                    used_at=now,
-                )
+            user = (
+                db.query(User)
+                .filter(User.id == token_record.user_id)
+                .first()
             )
 
-            result = db.execute(stmt)
+            if user is None:
+                raise InvalidTokenError()
 
-            if result.rowcount != 1:
-                raise RuntimeError(
-                    "Refresh token claim failed "
-                    "inside the protected write transaction"
+            if not user.is_active:
+                inactive_user_detected = True
+
+                logger.warning(
+                    "Refresh rejected for inactive user user_id=%s family_id=%s",
+                    token_record.user_id,
+                    token_record.family_id,
                 )
 
-            new_access_token = create_access_token(
-                user_id=token_record.user_id,
-            )
+                revoke_token_family(
+                    family_id=token_record.family_id,
+                    db=db,
+                )
 
-            (
-                new_refresh_token,
-                new_jti,
-                new_expires_at,
-            ) = create_refresh_token(
-                user_id=token_record.user_id,
-                family_id=token_record.family_id,
-            )
+            else:
+                now = datetime.now(timezone.utc)
 
-            new_refresh_record = RefreshToken(
-                jti=new_jti,
-                user_id=token_record.user_id,
-                family_id=token_record.family_id,
-                expires_at=new_expires_at,
-                status=RefreshTokenStatus.ACTIVE,
-            )
+                stmt = (
+                    update(RefreshToken)
+                    .where(
+                        RefreshToken.id == token_record.id,
+                        RefreshToken.status == RefreshTokenStatus.ACTIVE,
+                    )
+                    .values(
+                        status=RefreshTokenStatus.USED,
+                        used_at=now,
+                    )
+                )
 
-            db.add(new_refresh_record)
+                result = db.execute(stmt)
 
-            tokens = (
-                new_access_token,
-                new_refresh_token,
-            )
+                if result.rowcount != 1:
+                    raise RuntimeError(
+                        "Refresh token claim failed "
+                        "inside the protected write transaction"
+                    )
+
+                new_access_token = create_access_token(
+                    user_id=token_record.user_id,
+                )
+
+                (
+                    new_refresh_token,
+                    new_jti,
+                    new_expires_at,
+                ) = create_refresh_token(
+                    user_id=token_record.user_id,
+                    family_id=token_record.family_id,
+                )
+
+                new_refresh_record = RefreshToken(
+                    jti=new_jti,
+                    user_id=token_record.user_id,
+                    family_id=token_record.family_id,
+                    expires_at=new_expires_at,
+                    status=RefreshTokenStatus.ACTIVE,
+                )
+                db.add(new_refresh_record)
+
+                tokens = (
+                    new_access_token,
+                    new_refresh_token,
+                )
 
         else:
             raise InvalidTokenError()
 
-        if not reuse_detected and tokens is None:
+        if (
+            not reuse_detected
+            and not inactive_user_detected
+            and tokens is None
+        ):
             raise RuntimeError(
                 "Refresh rotation produced no token pair"
             )
@@ -287,8 +316,16 @@ def rotate_refresh_token(
         db.rollback()
         raise
 
+    if inactive_user_detected:
+        raise InactiveUserError()
+
     if reuse_detected:
         raise RefreshTokenReuseDetectedError()
+
+    if tokens is None:
+        raise RuntimeError(
+            "Refresh rotation committed without a token pair"
+        )
 
     return tokens
 

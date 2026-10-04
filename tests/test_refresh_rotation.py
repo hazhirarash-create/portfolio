@@ -2,11 +2,13 @@ from models.models import User, RefreshToken, RefreshTokenStatus
 import pytest
 from sqlalchemy import select
 from services import user_service
+from services.user_service import rotate_refresh_token
 from sqlalchemy.orm import Session
 from security.jwt_handler import decode_refresh_token
 from exceptions.auth_exceptions import (
     InvalidTokenError,
     RefreshTokenReuseDetectedError,
+    InactiveUserError
 )
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -613,3 +615,31 @@ def test_concurrent_rotation_allows_only_one_success(
 
         assert token_b.user_id == token_a.user_id
         assert issued_payload["user_id"] == token_b.user_id
+
+def test_inactive_user_refresh_revokes_family(
+        db_session,
+        test_user,
+        active_refresh_token
+):
+    test_user.is_active = False
+    db_session.commit()
+
+    with pytest.raises(InactiveUserError):
+        rotate_refresh_token(refresh_token=active_refresh_token["token"],
+                             db=db_session)
+
+    with Session(bind=db_session.get_bind()) as verification_db:
+        family_records = (verification_db.query(RefreshToken)
+                          .filter(RefreshToken.family_id == active_refresh_token["family_id"])
+                          .all()
+                          )
+        assert len(family_records) == 1
+
+        token_record = family_records[0]
+
+        assert token_record.status == RefreshTokenStatus.REVOKED
+        assert token_record.revoked_at is not None
+        assert token_record.used_at is None
+
+        for record in family_records:
+            assert record.status != RefreshTokenStatus.ACTIVE 
