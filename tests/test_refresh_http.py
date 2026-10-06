@@ -89,3 +89,38 @@ def test_refresh_reuse_response_and_revocation(
 
         for record in family_records:
             assert record.status != RefreshTokenStatus.ACTIVE
+
+def test_inactive_user_refresh_returns_403_and_revokes_family(
+        db_session,
+        active_refresh_token,
+        test_user,
+        http_client
+        ):
+
+    test_user.is_active = False
+    db_session.commit()
+
+    response = http_client.post(
+        "users/refresh",
+        json={"refresh_token": active_refresh_token["token"]}
+    )
+
+    assert response.status_code == 403
+
+    assert response.json() == {
+        "detail": "User account is inactive"
+    }
+
+    with Session(bind=db_session.get_bind()) as verification_db:
+        family_records = (
+            verification_db.query(RefreshToken)
+            .filter(RefreshToken.family_id == active_refresh_token["family_id"])
+            .all()        
+        )
+
+    assert len(family_records) == 1
+
+    token_record = family_records[0]
+    assert token_record.status == RefreshTokenStatus.REVOKED
+    assert token_record.revoked_at is not None
+    assert token_record.used_at is None
