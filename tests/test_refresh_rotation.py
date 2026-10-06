@@ -4,7 +4,8 @@ from sqlalchemy import select
 from services import user_service
 from services.user_service import rotate_refresh_token
 from sqlalchemy.orm import Session
-from security.jwt_handler import decode_refresh_token
+from security.jwt_handler import (decode_refresh_token,
+                                  create_refresh_token)
 from exceptions.auth_exceptions import (
     InvalidTokenError,
     RefreshTokenReuseDetectedError,
@@ -643,3 +644,50 @@ def test_inactive_user_refresh_revokes_family(
 
         for record in family_records:
             assert record.status != RefreshTokenStatus.ACTIVE 
+
+def test_inactive_user_refresh_revokes_all_active_tokens_in_family(
+    db_session,
+    test_user,
+    active_refresh_token,
+):
+    second_token, second_jti, second_expires_at = create_refresh_token(
+        user_id=test_user.id,
+        family_id=active_refresh_token["family_id"],
+    )
+
+    second_record = RefreshToken(
+        jti=second_jti,
+        user_id=test_user.id,
+        family_id=active_refresh_token["family_id"],
+        expires_at=second_expires_at,
+        status=RefreshTokenStatus.ACTIVE,
+    )
+
+    db_session.add(second_record)
+
+    test_user.is_active = False
+
+    db_session.commit()
+
+    with pytest.raises(InactiveUserError):
+        rotate_refresh_token(
+            refresh_token=active_refresh_token["token"],
+            db=db_session,
+        )
+
+    with Session(bind=db_session.get_bind()) as verification_db:
+        family_records = (
+            verification_db.query(RefreshToken)
+            .filter(
+                RefreshToken.family_id
+                == active_refresh_token["family_id"]
+            )
+            .all()
+        )
+
+        assert len(family_records) == 2
+
+        for record in family_records:
+            assert record.status == RefreshTokenStatus.REVOKED
+            assert record.revoked_at is not None
+            assert record.used_at is None

@@ -268,3 +268,35 @@ def test_refresh_token_with_invalid_sub_value_is_rejected():
 
     with pytest.raises(InvalidTokenError):
         decode_refresh_token(token)
+
+def test_expired_access_token_is_rejected():
+
+    token = jwt.encode(
+        {
+            "sub": "1",
+            "type": "access",
+            "exp": datetime.now(timezone.utc) - timedelta(minutes=1)
+            },
+            SECRET_KEY,
+            algorithm= ALGORITHM
+    )
+
+    with pytest.raises(InvalidTokenError):
+        decode_access_token(token)
+
+def test_expired_refresh_token_is_rejected():
+
+    token = jwt.encode(
+        {
+            "sub": "1",
+            "jti": "jti-1",
+            "family_id": "family-1",
+            "type": "refresh",
+            "exp": datetime.now(timezone.utc) - timedelta(minutes=1)
+        },
+        SECRET_KEY,
+        algorithm= ALGORITHM
+        )
+
+    with pytest.raises(InvalidTokenError):
+        decode_refresh_token(token)
