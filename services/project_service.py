@@ -1,20 +1,27 @@
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from models.models import Project
 from schemas.project import ProjectCreate, ProjectUpdate
 from exceptions.project_exceptions import ProjectNotFoundError
 
 
 def get_project_by_id(project_id:int, db:Session):
-    project = (db.query(Project).filter_by(id=project_id).first())
+    project = (db.query(Project)
+               .filter_by(id=project_id)
+               .first()
+               )
     if project is None:
         raise ProjectNotFoundError(project_id)
     return project
 
 
 def get_projects(page: int, limit:int, db:Session):
-    total = (db.query(Project).filter_by(is_published=True).count())
+    total = (db.query(Project)
+             .filter_by(is_published=True)
+             .count()
+             )
     offset = ((page - 1) * limit)
     projects =( db.query(Project)
+               .options(selectinload(Project.images))
                .filter_by(is_published=True)
                .order_by(Project.created_at.desc())
                .limit(limit)
