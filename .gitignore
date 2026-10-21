@@ -1,5 +1,28 @@
+# Environment and secrets
 .env
+.env.*
+!.env.example
+
+# Python virtual environment
 .venv/
+
+# Python cache
 __pycache__/
 *.pyc
-portfolio.db
+
+# Local databases and backups
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# Local Alembic test configurations
+alembic_test.ini
+alembic_stamp_test.ini
+
+# Local editor settings
+.vscode/
+
+# Pytest
+.pytest_cache/
