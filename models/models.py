@@ -33,7 +33,7 @@ class Project(BaseORMModel):
     description = Column(Text)
     github_url = Column(String, nullable= False)
     demo_url = Column(String)
-    is_published = Column(Boolean, default= False)
+    is_published = Column(Boolean, default= False, nullable=False)
     images = relationship("Image",
                           back_populates="project",
                           cascade="all,delete-orphan"

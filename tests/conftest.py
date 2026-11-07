@@ -3,7 +3,7 @@ from pytest import MonkeyPatch
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 import pytest
-from database import get_db
+from database import get_db, create_db_engine
 from main import app
 from models.models import RefreshToken, RefreshTokenStatus
 from sqlalchemy import create_engine
@@ -19,9 +19,8 @@ from security.jwt_handler import create_refresh_token
 def db_session(tmp_path):
     database_path = tmp_path / "test_portfolio.db"
 
-    test_engine = create_engine(
+    test_engine = create_db_engine(
         f"sqlite:///{database_path}",
-        echo=False,
     )
 
     try:

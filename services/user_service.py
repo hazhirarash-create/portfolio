@@ -98,6 +98,45 @@ def begin_sqlite_write_transaction(db:Session) -> None:
         db.rollback()
         raise
 
+def begin_protected_refresh_transaction(
+        db: Session,
+        user_id: int,
+) -> None:
+
+    if db.in_transaction():
+        raise RuntimeError(
+            "A write transaction requires a session"
+            "without an active transaction"
+        )
+
+    dialect = db.get_bind().dialect.name
+
+    if dialect == "sqlite":
+        begin_sqlite_write_transaction(db=db)
+        return
+
+    if dialect == "postgresql":
+        try:
+            user = (
+                db.query(User)
+                .filter(User.id == user_id)
+                .with_for_update()
+                .one_or_none()
+            )
+
+            if user is None:
+                raise InvalidTokenError()
+
+        except Exception:
+            db.rollback()
+            raise
+
+        return
+
+    raise RuntimeError(
+        f"Unsupported database dialect for protected refresh transaction: {dialect}"
+    )
+
 def create_user(
     user_data: UserCreate,
     db: Session
@@ -191,7 +230,10 @@ def rotate_refresh_token(
     tokens: tuple[str, str] | None = None
     inactive_user_detected = False
 
-    begin_sqlite_write_transaction(db=db)
+    begin_protected_refresh_transaction(
+        db=db,
+        user_id=payload["user_id"],
+    )
 
     try:
         token_record = get_refresh_token_by_jti(
@@ -368,7 +410,10 @@ def logout_refresh_session(
     
     payload = decode_refresh_token(refresh_token)
 
-    begin_sqlite_write_transaction(db=db)
+    begin_protected_refresh_transaction(
+        db=db,
+        user_id=payload["user_id"],
+    )
 
     try:
         token_record = get_refresh_token_by_jti(
