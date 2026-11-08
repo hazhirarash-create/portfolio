@@ -87,6 +87,7 @@ def validate_refresh_token_record(
     return token_record
 
 def begin_sqlite_write_transaction(db:Session) -> None:
+    
     if db.in_transaction():
         raise RuntimeError(
             "A write transaction requires a session "
