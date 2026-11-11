@@ -15,9 +15,10 @@ from security.jwt_handler import (
 from services import user_service
 from services.user_service import rotate_refresh_token, logout_refresh_session
 from exceptions.auth_exceptions import RefreshTokenReuseDetectedError
-from exceptions.auth_exceptions import InactiveUserError
+from exceptions.auth_exceptions import InactiveUserError, InvalidTokenError
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
+from threading import Event
 
 @pytest.fixture
 def pg_test_data():
@@ -805,3 +806,742 @@ def test_postgres_concurrent_rotation_allows_only_one_success(
             for record in family_records
         )
 
+
+def test_postgres_concurrent_reuse_and_rotation(
+    pg_test_data,
+):
+    engine = pg_test_data["engine"]
+    token_a = pg_test_data["token"]
+    jti_a = pg_test_data["jti"]
+    family_id = pg_test_data["family_id"]
+
+    # Step 1: Create Token B by rotating Token A
+    with Session(engine) as db:
+        _, token_b = rotate_refresh_token(
+            refresh_token=token_a,
+            db=db,
+        )
+
+        assert not db.in_transaction()
+
+    payload_b = decode_refresh_token(token_b)
+    jti_b = payload_b["jti"]
+
+    barrier = Barrier(2, timeout=10)
+
+    # Step 2: Reuse the old Token A
+    def reuse_token_a():
+        with Session(engine) as db:
+            barrier.wait()
+
+            with pytest.raises(
+                RefreshTokenReuseDetectedError
+            ):
+                rotate_refresh_token(
+                    refresh_token=token_a,
+                    db=db,
+                )
+
+            assert not db.in_transaction()
+
+        return "reuse"
+
+    # Step 3: Rotate Token B concurrently
+    def rotate_token_b():
+        with Session(engine) as db:
+            barrier.wait()
+
+            try:
+                tokens = rotate_refresh_token(
+                    refresh_token=token_b,
+                    db=db,
+                )
+
+            except InvalidTokenError:
+                assert not db.in_transaction()
+                return "rejected", None
+
+            else:
+                assert not db.in_transaction()
+                return "success", tokens
+
+    # Step 4: Execute both operations concurrently
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        reuse_future = executor.submit(reuse_token_a)
+        rotation_future = executor.submit(rotate_token_b)
+
+        reuse_outcome = reuse_future.result(timeout=20)
+        rotation_outcome, issued_tokens = (
+            rotation_future.result(timeout=20)
+        )
+
+    assert reuse_outcome == "reuse"
+
+    assert rotation_outcome in (
+        "rejected",
+        "success",
+    )
+
+    # Step 5: Verify the final committed state
+    with Session(engine) as db:
+        family_records = (
+            db.query(RefreshToken)
+            .filter(RefreshToken.family_id == family_id)
+            .all()
+        )
+
+        records_by_jti = {
+            record.jti: record
+            for record in family_records
+        }
+
+        record_a = records_by_jti[jti_a]
+        record_b = records_by_jti[jti_b]
+
+        assert record_a.status == RefreshTokenStatus.USED
+        assert record_a.used_at is not None
+
+        assert all(
+            record.status != RefreshTokenStatus.ACTIVE
+            for record in family_records
+        )
+
+        if rotation_outcome == "rejected":
+            assert issued_tokens is None
+            assert len(family_records) == 2
+
+            assert record_b.status == RefreshTokenStatus.REVOKED
+            assert record_b.revoked_at is not None
+
+        else:
+            assert issued_tokens is not None
+            assert len(family_records) == 3
+
+            assert record_b.status == RefreshTokenStatus.USED
+            assert record_b.used_at is not None
+
+            _, token_c = issued_tokens
+            payload_c = decode_refresh_token(token_c)
+
+            assert payload_c["family_id"] == family_id
+            assert payload_c["jti"] not in (jti_a, jti_b)
+
+            record_c = records_by_jti[payload_c["jti"]]
+
+            assert record_c.status == RefreshTokenStatus.REVOKED
+            assert record_c.revoked_at is not None
+            assert record_c.used_at is None
+
+def test_postgres_concurrent_rotation_and_logout(
+    pg_test_data,
+):
+    engine = pg_test_data["engine"]
+    original_token = pg_test_data["token"]
+    original_jti = pg_test_data["jti"]
+    family_id = pg_test_data["family_id"]
+
+    barrier = Barrier(2, timeout=10)
+
+    def attempt_rotation():
+        with Session(engine) as db:
+            barrier.wait()
+
+            try:
+                tokens = rotate_refresh_token(
+                    refresh_token=original_token,
+                    db=db,
+                )
+
+            except InvalidTokenError:
+                assert not db.in_transaction()
+                return "rejected", None
+
+            else:
+                assert not db.in_transaction()
+                return "success", tokens
+
+    def attempt_logout():
+        with Session(engine) as db:
+            barrier.wait()
+
+            logout_refresh_session(
+                refresh_token=original_token,
+                db=db,
+            )
+
+            assert not db.in_transaction()
+            return "logout"
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        rotation_future = executor.submit(attempt_rotation)
+        logout_future = executor.submit(attempt_logout)
+
+        rotation_outcome, issued_tokens = (
+            rotation_future.result(timeout=20)
+        )
+
+        logout_outcome = logout_future.result(timeout=20)
+
+    assert logout_outcome == "logout"
+    assert rotation_outcome in ("success", "rejected")
+
+    with Session(engine) as db:
+        family_records = (
+            db.query(RefreshToken)
+            .filter(RefreshToken.family_id == family_id)
+            .all()
+        )
+
+        records_by_jti = {
+            record.jti: record
+            for record in family_records
+        }
+
+        original_record = records_by_jti[original_jti]
+
+        assert all(
+            record.status != RefreshTokenStatus.ACTIVE
+            for record in family_records
+        )
+
+        if rotation_outcome == "rejected":
+            assert issued_tokens is None
+            assert len(family_records) == 1
+
+            assert original_record.status == RefreshTokenStatus.REVOKED
+            assert original_record.revoked_at is not None
+            assert original_record.used_at is None
+
+        else:
+            assert issued_tokens is not None
+            assert len(family_records) == 2
+
+            assert original_record.status == RefreshTokenStatus.USED
+            assert original_record.used_at is not None
+
+            _, new_refresh_token = issued_tokens
+            new_payload = decode_refresh_token(new_refresh_token)
+
+            new_record = records_by_jti[new_payload["jti"]]
+
+            assert new_record.status == RefreshTokenStatus.REVOKED
+            assert new_record.revoked_at is not None
+            assert new_record.used_at is None
+            assert new_record.family_id == family_id
+
+def test_postgres_rotation_locks_before_logout(
+    pg_test_data,
+    monkeypatch,
+):
+    engine = pg_test_data["engine"]
+    original_token = pg_test_data["token"]
+    original_jti = pg_test_data["jti"]
+    family_id = pg_test_data["family_id"]
+
+    rotation_has_lock = Event()
+    logout_started = Event()
+    allow_rotation = Event()
+
+    original_begin = (
+        user_service.begin_protected_refresh_transaction
+    )
+
+    # Step 1: Pause rotation after acquiring the user lock.
+    def controlled_begin(db, user_id):
+        original_begin(
+            db=db,
+            user_id=user_id,
+        )
+
+        if not rotation_has_lock.is_set():
+            rotation_has_lock.set()
+
+            if not allow_rotation.wait(timeout=10):
+                raise TimeoutError(
+                    "Rotation was not released"
+                )
+
+    monkeypatch.setattr(
+        user_service,
+        "begin_protected_refresh_transaction",
+        controlled_begin,
+    )
+
+    # Step 2: Rotation worker
+    def run_rotation():
+        with Session(engine) as db:
+            tokens = rotate_refresh_token(
+                refresh_token=original_token,
+                db=db,
+            )
+
+            assert not db.in_transaction()
+            return tokens
+
+    # Step 3: Logout worker
+    def run_logout():
+        with Session(engine) as db:
+            logout_started.set()
+
+            logout_refresh_session(
+                refresh_token=original_token,
+                db=db,
+            )
+
+            assert not db.in_transaction()
+
+    # Step 4: Control the execution order.
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        rotation_future = executor.submit(run_rotation)
+
+        try:
+            assert rotation_has_lock.wait(timeout=10)
+
+            logout_future = executor.submit(run_logout)
+
+            assert logout_started.wait(timeout=10)
+
+        finally:
+            # Always release the paused worker.
+            allow_rotation.set()
+
+        issued_tokens = rotation_future.result(timeout=20)
+        logout_future.result(timeout=20)
+
+    # Step 5: Verify the committed database state.
+    _, refresh_b = issued_tokens
+    payload_b = decode_refresh_token(refresh_b)
+
+    with Session(engine) as db:
+        family_records = (
+            db.query(RefreshToken)
+            .filter(
+                RefreshToken.family_id == family_id
+            )
+            .all()
+        )
+
+        assert len(family_records) == 2
+
+        records_by_jti = {
+            record.jti: record
+            for record in family_records
+        }
+
+        record_a = records_by_jti[original_jti]
+        record_b = records_by_jti[payload_b["jti"]]
+
+        assert record_a.status == RefreshTokenStatus.USED
+        assert record_a.used_at is not None
+
+        assert record_b.status == RefreshTokenStatus.REVOKED
+        assert record_b.revoked_at is not None
+        assert record_b.used_at is None
+
+        assert all(
+            record.status != RefreshTokenStatus.ACTIVE
+            for record in family_records
+        )
+
+def test_postgres_logout_locks_before_rotation(
+    pg_test_data,
+    monkeypatch,
+):
+    engine = pg_test_data["engine"]
+    original_token = pg_test_data["token"]
+    original_jti = pg_test_data["jti"]
+    family_id = pg_test_data["family_id"]
+
+    logout_has_lock = Event()
+    rotation_started = Event()
+    allow_logout = Event()
+
+    original_begin = (
+        user_service.begin_protected_refresh_transaction
+    )
+
+    def controlled_begin(db, user_id):
+        original_begin(
+            db=db,
+            user_id=user_id,
+        )
+
+        if not logout_has_lock.is_set():
+            logout_has_lock.set()
+
+            if not allow_logout.wait(timeout=10):
+                raise TimeoutError(
+                    "Logout was not released"
+                )
+
+    monkeypatch.setattr(
+        user_service,
+        "begin_protected_refresh_transaction",
+        controlled_begin,
+    )
+
+    def run_logout():
+        with Session(engine) as db:
+            logout_refresh_session(
+                refresh_token=original_token,
+                db=db,
+            )
+
+            assert not db.in_transaction()
+            return "logout"
+
+    def run_rotation():
+        with Session(engine) as db:
+            rotation_started.set()
+
+            try:
+                tokens = rotate_refresh_token(
+                    refresh_token=original_token,
+                    db=db,
+                )
+
+            except InvalidTokenError:
+                assert not db.in_transaction()
+                return "rejected", None
+
+            else:
+                assert not db.in_transaction()
+                return "success", tokens
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        logout_future = executor.submit(run_logout)
+
+        try:
+            assert logout_has_lock.wait(timeout=10)
+
+            rotation_future = executor.submit(run_rotation)
+
+            assert rotation_started.wait(timeout=10)
+
+        finally:
+            allow_logout.set()
+
+        logout_outcome = logout_future.result(timeout=20)
+
+        rotation_outcome, issued_tokens = (
+            rotation_future.result(timeout=20)
+        )
+
+    assert logout_outcome == "logout"
+    assert rotation_outcome == "rejected"
+    assert issued_tokens is None
+
+    with Session(engine) as db:
+        family_records = (
+            db.query(RefreshToken)
+            .filter(RefreshToken.family_id == family_id)
+            .all()
+        )
+
+        assert len(family_records) == 1
+
+        original_record = family_records[0]
+
+        assert original_record.jti == original_jti
+
+        assert (
+            original_record.status
+            == RefreshTokenStatus.REVOKED
+        )
+
+        assert original_record.revoked_at is not None
+        assert original_record.used_at is None
+
+        assert all(
+            record.status != RefreshTokenStatus.ACTIVE
+            for record in family_records
+        )
+
+def test_postgres_reuse_locks_before_rotation(
+    pg_test_data,
+    monkeypatch,
+):
+    engine = pg_test_data["engine"]
+    token_a = pg_test_data["token"]
+    jti_a = pg_test_data["jti"]
+    family_id = pg_test_data["family_id"]
+
+    with Session(engine) as db:
+        _, token_b = rotate_refresh_token(
+            refresh_token=token_a,
+            db=db,
+        )
+        assert not db.in_transaction()
+
+    payload_b = decode_refresh_token(token_b)
+    jti_b = payload_b["jti"]
+
+    reuse_has_lock = Event()
+    rotation_started = Event()
+    allow_reuse = Event()
+
+    original_begin = (
+        user_service.begin_protected_refresh_transaction
+    )
+
+    def controlled_begin(db, user_id):
+        original_begin(
+            db=db,
+            user_id=user_id,
+        )
+
+        if not reuse_has_lock.is_set():
+            reuse_has_lock.set()
+
+            if not allow_reuse.wait(timeout=10):
+                raise TimeoutError(
+                    "Reuse was not released"
+                )
+
+    monkeypatch.setattr(
+        user_service,
+        "begin_protected_refresh_transaction",
+        controlled_begin,
+    )
+
+    def run_reuse():
+        with Session(engine) as db:
+            with pytest.raises(
+                RefreshTokenReuseDetectedError
+            ):
+                rotate_refresh_token(
+                    refresh_token=token_a,
+                    db=db,
+                )
+
+            assert not db.in_transaction()
+            return "reuse"
+        
+    def run_rotation():
+        with Session(engine) as db:
+            rotation_started.set()
+
+            try:
+                tokens = rotate_refresh_token(
+                    refresh_token=token_b,
+                    db=db,
+                )
+
+            except InvalidTokenError:
+                assert not db.in_transaction()
+                return "rejected", None
+
+            else:
+                assert not db.in_transaction()
+                return "success", tokens
+
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        reuse_future = executor.submit(run_reuse)
+
+        try:
+            assert reuse_has_lock.wait(timeout=10)
+
+            rotation_future = executor.submit(
+                run_rotation
+            )
+
+            assert rotation_started.wait(timeout=10)
+
+        finally:
+            allow_reuse.set()
+
+        reuse_outcome = reuse_future.result(timeout=20)
+
+        rotation_outcome, issued_tokens = (
+            rotation_future.result(timeout=20)
+        )
+
+    assert reuse_outcome == "reuse"
+    assert rotation_outcome == "rejected"
+    assert issued_tokens is None
+
+    with Session(engine) as db:
+        family_records = (
+            db.query(RefreshToken)
+            .filter(
+                RefreshToken.family_id == family_id
+            )
+            .all()
+        )
+
+        assert len(family_records) == 2
+
+        records_by_jti = {
+            record.jti: record
+            for record in family_records
+        }
+
+        record_a = records_by_jti[jti_a]
+        record_b = records_by_jti[jti_b]
+
+        assert record_a.status == RefreshTokenStatus.USED
+        assert record_a.used_at is not None
+        assert record_a.revoked_at is None
+
+        assert record_b.status == RefreshTokenStatus.REVOKED
+        assert record_b.revoked_at is not None
+        assert record_b.used_at is None
+
+        assert all(
+            record.status != RefreshTokenStatus.ACTIVE
+            for record in family_records
+        )
+
+def test_postgres_rotation_locks_before_reuse(
+    pg_test_data,
+    monkeypatch,
+):
+    engine = pg_test_data["engine"]
+    token_a = pg_test_data["token"]
+    jti_a = pg_test_data["jti"]
+    family_id = pg_test_data["family_id"]
+
+    # Step 1: Rotate A to create active Token B.
+    with Session(engine) as db:
+        _, token_b = rotate_refresh_token(
+            refresh_token=token_a,
+            db=db,
+        )
+
+        assert not db.in_transaction()
+
+    payload_b = decode_refresh_token(token_b)
+    jti_b = payload_b["jti"]
+
+    rotation_has_lock = Event()
+    reuse_started = Event()
+    allow_rotation = Event()
+
+    original_begin = (
+        user_service.begin_protected_refresh_transaction
+    )
+
+    # Step 2: Pause Rotation B after acquiring the lock.
+    def controlled_begin(db, user_id):
+        original_begin(
+            db=db,
+            user_id=user_id,
+        )
+
+        if not rotation_has_lock.is_set():
+            rotation_has_lock.set()
+
+            if not allow_rotation.wait(timeout=10):
+                raise TimeoutError(
+                    "Rotation was not released"
+                )
+
+    monkeypatch.setattr(
+        user_service,
+        "begin_protected_refresh_transaction",
+        controlled_begin,
+    )
+
+    # Step 3: Rotation B worker.
+    def run_rotation():
+        with Session(engine) as db:
+            tokens = rotate_refresh_token(
+                refresh_token=token_b,
+                db=db,
+            )
+
+            assert not db.in_transaction()
+            return tokens
+
+    # Step 4: Reuse A worker.
+    def run_reuse():
+        with Session(engine) as db:
+            reuse_started.set()
+
+            with pytest.raises(
+                RefreshTokenReuseDetectedError
+            ):
+                rotate_refresh_token(
+                    refresh_token=token_a,
+                    db=db,
+                )
+
+            assert not db.in_transaction()
+            return "reuse"
+
+    # Step 5: Control execution order.
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        rotation_future = executor.submit(
+            run_rotation
+        )
+
+        try:
+            assert rotation_has_lock.wait(timeout=10)
+
+            reuse_future = executor.submit(
+                run_reuse
+            )
+
+            assert reuse_started.wait(timeout=10)
+
+        finally:
+            # Always release the paused Rotation.
+            allow_rotation.set()
+
+        issued_tokens = rotation_future.result(
+            timeout=20
+        )
+
+        reuse_outcome = reuse_future.result(
+            timeout=20
+        )
+
+    assert reuse_outcome == "reuse"
+
+    # Step 6: Identify newly issued Token C.
+    _, token_c = issued_tokens
+
+    payload_c = decode_refresh_token(token_c)
+    jti_c = payload_c["jti"]
+
+    assert payload_c["family_id"] == family_id
+    assert jti_c not in (jti_a, jti_b)
+
+    # Step 7: Verify final committed state.
+    with Session(engine) as db:
+        family_records = (
+            db.query(RefreshToken)
+            .filter(
+                RefreshToken.family_id == family_id
+            )
+            .all()
+        )
+
+        assert len(family_records) == 3
+
+        records_by_jti = {
+            record.jti: record
+            for record in family_records
+        }
+
+        record_a = records_by_jti[jti_a]
+        record_b = records_by_jti[jti_b]
+        record_c = records_by_jti[jti_c]
+
+        assert record_a.status == RefreshTokenStatus.USED
+        assert record_a.used_at is not None
+        assert record_a.revoked_at is None
+
+        assert record_b.status == RefreshTokenStatus.USED
+        assert record_b.used_at is not None
+        assert record_b.revoked_at is None
+
+        assert record_c.status == RefreshTokenStatus.REVOKED
+        assert record_c.revoked_at is not None
+        assert record_c.used_at is None
+
+        assert all(
+            record.status != RefreshTokenStatus.ACTIVE
+            for record in family_records
+        )
