@@ -1,12 +1,9 @@
 import pytest
-from pytest import MonkeyPatch
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
-import pytest
 from database import get_db, create_db_engine
 from main import app
 from models.models import RefreshToken, RefreshTokenStatus
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 import uuid
 from database import Base

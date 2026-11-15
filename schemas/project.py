@@ -1,5 +1,6 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from datetime import datetime
+
 
 
 class ImageResponse(BaseModel):
@@ -42,4 +43,18 @@ class ProjectUpdate(BaseModel):
     github_url: str | None = None
     demo_url: str | None = None
     is_published: bool | None = None
-    model_config = ConfigDict(from_attributes=True)
+
+    @field_validator(
+        "title",
+        "github_url",
+        "is_published",
+        mode="before",
+    )
+    @classmethod
+    def reject_null_for_required_fields(cls, value):
+        if value is None:
+            raise ValueError(
+                "This field cannot be null"
+            )
+
+        return value

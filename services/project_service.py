@@ -6,13 +6,28 @@ from exceptions.project_exceptions import ProjectNotFoundError
 
 def get_project_by_id(project_id:int, db:Session):
     project = (db.query(Project)
-               .filter_by(id=project_id)
+               .filter_by(id=project_id,
+                          is_published=True)
                .first()
                )
     if project is None:
         raise ProjectNotFoundError(project_id)
     return project
 
+def get_project_by_id_for_admin(
+    project_id: int,
+    db: Session,
+):
+    project = (
+        db.query(Project)
+        .filter_by(id=project_id)
+        .first()
+    )
+
+    if project is None:
+        raise ProjectNotFoundError(project_id)
+
+    return project
 
 def get_projects(page: int, limit:int, db:Session):
     total = (db.query(Project)
@@ -23,7 +38,8 @@ def get_projects(page: int, limit:int, db:Session):
     projects =( db.query(Project)
                .options(selectinload(Project.images))
                .filter_by(is_published=True)
-               .order_by(Project.created_at.desc())
+               .order_by(Project.created_at.desc(),
+                         Project.id.desc())
                .limit(limit)
                .offset(offset)
                .all())
@@ -43,7 +59,7 @@ def create_project(project:ProjectCreate, db:Session):
 
 
 def update_project(project_id: int, project:ProjectUpdate, db: Session):
-    existing_project = get_project_by_id(
+    existing_project = get_project_by_id_for_admin(
         project_id=project_id,
         db=db
     )
@@ -62,7 +78,7 @@ def update_project(project_id: int, project:ProjectUpdate, db: Session):
 def delete_project(project_id: int,
                    db: Session
                    ):
-    existing_project = get_project_by_id(
+    existing_project = get_project_by_id_for_admin(
         project_id=project_id,
         db=db
     )
