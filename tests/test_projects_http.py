@@ -754,3 +754,355 @@ def test_update_project_rejects_null_for_required_fields(
         "https://github.com/example/original"
     )
     assert unchanged_project.is_published is False
+
+@pytest.mark.parametrize(
+    "nullable_field",
+    [
+        "description",
+        "demo_url"
+    ]
+)
+def test_update_project_allows_null_for_nullable_fields(
+    db_session,
+    http_client,
+    test_user,
+    nullable_field
+):
+
+    project = Project(
+        title= "Original Title",
+        description= "Original Description",
+        github_url= "https://github.com/example/original",
+        demo_url= "https://example.com/demo",
+        is_published= False
+    )
+
+    db_session.add(project)
+    db_session.commit()
+
+    project_id = project.id
+
+    test_user.is_admin = True
+    db_session.commit()
+
+    access_token = create_access_token(
+        user_id=test_user.id
+    )
+
+    response = http_client.patch(
+        f"/projects/{project_id}",
+        headers={
+            "Authorization": f"Bearer {access_token}"
+        },
+        json={
+            nullable_field: None
+        }
+    )
+
+    assert response.status_code == 200, response.text
+
+    data = response.json()
+
+    assert data[nullable_field] is None
+
+    db_session.expire_all()
+
+    updated_project = db_session.get(
+        Project,
+        project_id,
+    )
+
+    assert updated_project is not None
+
+    assert getattr(
+        updated_project,
+        nullable_field,
+    ) is None
+
+    assert updated_project.title == "Original Title"
+    assert updated_project.github_url == (
+        "https://github.com/example/original"
+    )
+    assert updated_project.is_published is False
+
+    if nullable_field == "description":
+        assert updated_project.demo_url == (
+            "https://example.com/demo"
+        )
+    else:
+        assert updated_project.description == (
+            "Original Description"
+        )
+
+@pytest.mark.parametrize(
+    "invalid_data, invalid_field",
+    [
+        (
+            {
+                "title": "",
+                "github_url": "https://github.com/example/project",
+            },
+            "title",
+        ),
+        (
+            {
+                "title": "   ",
+                "github_url": "https://github.com/example/project",
+            },
+            "title",
+        ),
+        (
+            {
+                "title": "Valid Project",
+                "github_url": "not-a-url",
+            },
+            "github_url",
+        ),
+        (
+            {
+                "title": "Valid Project",
+                "github_url": "https://example.com/project",
+            },
+            "github_url",
+        ),
+    ],
+)
+def test_create_project_rejects_invalid_fields(
+    db_session,
+    http_client,
+    test_user,
+    invalid_data,
+    invalid_field,
+):
+
+    test_user.is_admin = True
+    db_session.commit()
+
+    access_token = create_access_token(
+        user_id=test_user.id,
+    )
+
+    response = http_client.post(
+        "/projects",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+        },
+        json=invalid_data,
+    )
+
+    assert response.status_code == 422, response.text
+
+    errors = response.json()["detail"]
+
+    assert any(
+        error["loc"] == ["body", invalid_field]
+        for error in errors
+    )
+
+    projects = db_session.query(Project).all()
+
+    assert projects == []
+
+@pytest.mark.parametrize(
+    "invalid_data, invalid_field",
+    [
+        (
+            {"title": ""},
+            "title",
+        ),
+        (
+            {"title": "   "},
+            "title",
+        ),
+        (
+            {"github_url": "not-a-url"},
+            "github_url",
+        ),
+        (
+            {"github_url": "https://example.com/project"},
+            "github_url",
+        ),
+    ],
+)
+def test_update_project_rejects_invalid_fields(
+    db_session,
+    http_client,
+    test_user,
+    invalid_data,
+    invalid_field,
+):
+
+    project = Project(
+        title="Original Title",
+        description="Original Description",
+        github_url="https://github.com/example/original",
+        is_published=False,
+    )
+
+    db_session.add(project)
+    db_session.commit()
+
+    project_id = project.id
+
+    test_user.is_admin = True
+    db_session.commit()
+
+    access_token = create_access_token(
+        user_id=test_user.id,
+    )
+
+    response = http_client.patch(
+        f"/projects/{project_id}",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+        },
+        json=invalid_data,
+    )
+
+    assert response.status_code == 422, response.text
+
+    errors = response.json()["detail"]
+
+    assert any(
+        error["loc"] == ["body", invalid_field]
+        for error in errors
+    )
+
+    db_session.expire_all()
+
+    unchanged_project = db_session.get(
+        Project,
+        project_id,
+    )
+
+    assert unchanged_project is not None
+    assert unchanged_project.title == "Original Title"
+    assert unchanged_project.description == (
+        "Original Description"
+    )
+    assert unchanged_project.github_url == (
+        "https://github.com/example/original"
+    )
+    assert unchanged_project.is_published is False
+
+
+@pytest.mark.parametrize(
+    "invalid_github_url",
+    [
+        "http://github.com/example/project",
+        "https://github.com",
+        "https://github.com/example",
+        "https://github.com/example/project/tree/main",
+        "https://github.com.attacker.com/example/project",
+    ],
+)
+def test_create_project_rejects_invalid_github_repository_urls(
+    db_session,
+    http_client,
+    test_user,
+    invalid_github_url,
+):
+
+    test_user.is_admin = True
+    db_session.commit()
+
+    access_token = create_access_token(
+        user_id=test_user.id,
+    )
+
+    response = http_client.post(
+        "/projects",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+        },
+        json={
+            "title": "Test Project",
+            "github_url": invalid_github_url,
+        },
+    )
+
+    assert response.status_code == 422, response.text
+
+    errors = response.json()["detail"]
+
+    assert any(
+        error["loc"] == ["body", "github_url"]
+        for error in errors
+    )
+
+    projects = db_session.query(Project).all()
+
+    assert projects == []
+
+
+@pytest.mark.parametrize(
+    "invalid_github_url",
+    [
+        "http://github.com/example/project",
+        "https://github.com",
+        "https://github.com/example",
+        "https://github.com/example/project/tree/main",
+        "https://github.com.attacker.com/example/project",
+    ],
+)
+def test_update_project_rejects_invalid_github_repository_urls(
+    db_session,
+    http_client,
+    test_user,
+    invalid_github_url,
+):
+    project = Project(
+        title="Original Project",
+        description="Original Description",
+        github_url="https://github.com/example/original",
+        is_published=False,
+    )
+
+    db_session.add(project)
+    db_session.commit()
+
+    project_id = project.id
+
+    test_user.is_admin = True
+    db_session.commit()
+
+    access_token = create_access_token(
+        user_id=test_user.id,
+    )
+
+    response = http_client.patch(
+        f"/projects/{project_id}",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+        },
+        json={
+            "github_url": invalid_github_url,
+        },
+    )
+
+    assert response.status_code == 422, response.text
+
+    errors = response.json()["detail"]
+
+    assert any(
+        error["loc"] == ["body", "github_url"]
+        for error in errors
+    )
+
+    db_session.expire_all()
+
+    unchanged_project = db_session.get(
+        Project,
+        project_id,
+    )
+
+    assert unchanged_project is not None
+    assert unchanged_project.github_url == (
+        "https://github.com/example/original"
+    )
+    assert unchanged_project.title == "Original Project"
+    assert unchanged_project.description == (
+        "Original Description"
+    )
+    assert unchanged_project.is_published is False
+
