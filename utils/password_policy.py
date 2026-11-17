@@ -1,7 +1,7 @@
 COMMON_PASSWORDS = {
-    "password1234"
-    "qwerty123456"
-    "admin12345678"
+    "password1234",
+    "qwerty123456",
+    "admin12345678",
     "password",
     "password123",
     "12345678",

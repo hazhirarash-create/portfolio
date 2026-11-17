@@ -1,6 +1,6 @@
 from models.models import Project, Image
 from security.jwt_handler import create_access_token
-from sqlalchemy.orm import Session
+from datetime import datetime, timezone
 import pytest
 
 def test_get_projects_http_returns_published_projects_with_images(
@@ -1105,4 +1105,118 @@ def test_update_project_rejects_invalid_github_repository_urls(
         "Original Description"
     )
     assert unchanged_project.is_published is False
+
+
+def test_get_unpublished_project_by_id_returns_404(
+    db_session,
+    http_client,
+):
+
+    project = Project(
+        title="Private Draft",
+        description="Not visible to the public",
+        github_url="https://github.com/example/private-draft",
+        is_published=False,
+    )
+
+    db_session.add(project)
+    db_session.commit()
+
+    project_id = project.id
+
+    response = http_client.get(
+        f"/projects/{project_id}"
+    )
+
+    assert response.status_code == 404, response.text
+
+    assert response.json() == {
+        "detail": f"Project {project_id} not found"
+    }
+
+    db_session.expire_all()
+
+    existing_project = db_session.get(
+        Project,
+        project_id,
+    )
+
+    assert existing_project is not None
+    assert existing_project.title == "Private Draft"
+    assert existing_project.is_published is False
+
+ 
+def test_get_projects_uses_id_as_tiebreaker_for_same_created_at(
+    db_session,
+    http_client,
+):
+
+    same_created_at = datetime(
+        2026, 1, 1, 12, 0, 0,
+        tzinfo=timezone.utc,
+    )
+
+    projects = [
+        Project(
+            title=f"Project {number}",
+            github_url=f"https://github.com/example/project-{number}",
+            is_published=True,
+            created_at=same_created_at,
+        )
+        for number in range(1, 6)
+    ]
+
+    db_session.add_all(projects)
+    db_session.commit()
+
+    project_ids = [project.id for project in projects]
+
+    expected_ids = sorted(project_ids, reverse=True)
+
+    response_page_1 = http_client.get(
+        "/projects",
+        params={
+            "page": 1,
+            "limit": 2,
+        },
+    )
+
+    assert response_page_1.status_code == 200, (
+        response_page_1.text
+    )
+
+    response_page_2 = http_client.get(
+        "/projects",
+        params={
+            "page": 2,
+            "limit": 2,
+        },
+    )
+
+    assert response_page_2.status_code == 200, (
+        response_page_2.text
+    )
+
+    response_page_3 = http_client.get(
+        "/projects",
+        params={
+            "page": 3,
+            "limit": 2,
+        },
+    )
+
+    assert response_page_3.status_code == 200, (
+        response_page_3.text
+    )
+
+    actual_ids = (
+        [item["id"] for item in response_page_1.json()["projects"]]
+        + [item["id"] for item in response_page_2.json()["projects"]]
+        + [item["id"] for item in response_page_3.json()["projects"]]
+    )
+
+    assert actual_ids == expected_ids
+
+    assert len(actual_ids) == 5
+    assert len(set(actual_ids)) == 5
 
