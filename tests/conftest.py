@@ -9,6 +9,7 @@ import uuid
 from database import Base
 from models.models import User, RefreshToken, RefreshTokenStatus
 from security.jwt_handler import create_refresh_token
+from security.rate_limit import check_rate_limit
 
 
 
@@ -96,4 +97,14 @@ def http_client(db_session, monkeypatch):
 
     with TestClient(app) as client:
         yield client
+
+
+@pytest.fixture
+def bypass_login_rate_limit(monkeypatch):
+
+    monkeypatch.setitem(
+        app.dependency_overrides,
+        check_rate_limit,
+        lambda: None,
+    )
 
