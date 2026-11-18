@@ -2,12 +2,17 @@
 from models.models import User, RefreshToken
 import pytest
 from main import app
+from security.jwt_handler import create_access_token
 from security.rate_limit import check_rate_limit
+import jwt
+from datetime import datetime, timedelta, timezone
+from core.config import SECRET_KEY, ALGORITHM
 
 
 def test_register_user_success(
     db_session,
     http_client,
+    bypass_login_rate_limit,
 ):
 
     registration_data = {
@@ -321,6 +326,7 @@ def test_login_user_success(
 def test_login_with_wrong_password_is_rejected(
     db_session,
     http_client,
+    bypass_login_rate_limit,
 ):
 
     registration_data = {
@@ -367,14 +373,9 @@ def test_login_with_wrong_password_is_rejected(
 def test_login_with_nonexistent_username_is_rejected(
     db_session,
     http_client,
-    monkeypatch,
+    bypass_login_rate_limit,
 ):
 
-    monkeypatch.setitem(
-        app.dependency_overrides,
-        check_rate_limit,
-        lambda: None,
-    )
 
     registration_data = {
         "username": "existing_login_user",
@@ -430,3 +431,203 @@ def test_login_with_nonexistent_username_is_rejected(
     ).all()
 
     assert refresh_tokens == []
+
+
+def test_get_me_with_valid_access_token(
+    db_session,
+    http_client,
+    bypass_login_rate_limit,
+):
+
+    registration_data = {
+        "username": "get_me_user",
+        "email": "get_me@example.com",
+        "password": "UniquePassword_2026!Q7",
+    }
+
+    register_response = http_client.post(
+        "/users",
+        json=registration_data,
+    )
+
+    assert register_response.status_code == 201, (
+        register_response.text
+    )
+
+    user_id = register_response.json()["id"]
+
+    login_response = http_client.post(
+        "/users/login",
+        data={
+            "username": registration_data["username"],
+            "password": registration_data["password"],
+        },
+    )
+
+    assert login_response.status_code == 200, (
+        login_response.text
+    )
+
+    access_token = login_response.json()["access_token"]
+
+    response = http_client.get(
+        "/users/me",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+
+    data = response.json()
+
+    assert data["id"] == user_id
+    assert data["username"] == "get_me_user"
+    assert data["email"] == "get_me@example.com"
+    assert data["is_active"] is True
+    assert data["is_admin"] is False
+
+    assert "password" not in data
+    assert "hashed_password" not in data
+
+
+def test_get_me_without_token_is_rejected(
+    http_client,
+):
+
+    response = http_client.get(
+        "/users/me"
+    )
+
+    assert response.status_code == 401, response.text
+
+    assert (
+        response.headers.get("WWW-Authenticate")
+        == "Bearer"
+    )
+
+def test_get_me_with_invalid_access_token_is_rejected(
+    http_client,
+):
+
+    response = http_client.get(
+        "/users/me",
+        headers={
+            "Authorization": "Bearer invalid_token"
+        },
+    )
+
+    assert response.status_code == 401, response.text
+    assert (
+        response.headers.get("WWW-Authenticate")
+        == "Bearer"
+    )
+
+def test_get_me_with_expired_access_token_is_rejected(
+    http_client,
+):
+
+    expired_token = jwt.encode(
+        {
+            "sub": "1",
+            "exp": datetime.now(timezone.utc) - timedelta(minutes=1),
+            "type": "access",
+        },
+        SECRET_KEY,
+        algorithm=ALGORITHM,
+    )
+
+    response = http_client.get(
+        "/users/me",
+        headers={
+            "Authorization": f"Bearer {expired_token}"
+        },
+    )
+
+    assert response.status_code == 401, response.text
+    assert (
+        response.headers.get("WWW-Authenticate")
+        == "Bearer"
+    )
+
+
+def test_get_me_with_inactive_user_is_forbidden(
+    db_session,
+    http_client,
+    test_user,
+):
+    access_token = create_access_token(
+        user_id=test_user.id,
+    )
+
+    test_user.is_active = False
+    db_session.commit()
+
+    response = http_client.get(
+        "/users/me",
+        headers={
+            "Authorization": f"Bearer {access_token}",
+        },
+    )
+
+    assert response.status_code == 403, response.text
+
+    db_session.expire_all()
+
+    inactive_user = db_session.get(
+        User,
+        test_user.id,
+    )
+
+    assert inactive_user is not None
+    assert inactive_user.is_active is False
+
+
+def test_get_me_rejects_refresh_token(
+    http_client,
+    bypass_login_rate_limit,
+):
+
+    registration_data = {
+        "username": "refresh_as_access_user",
+        "email": "refresh_as_access@example.com",
+        "password": "UniquePassword_2026!Q7",
+    }
+
+    register_response = http_client.post(
+        "/users",
+        json=registration_data,
+    )
+
+    assert register_response.status_code == 201, (
+        register_response.text
+    )
+
+    login_response = http_client.post(
+        "/users/login",
+        data={
+            "username": registration_data["username"],
+            "password": registration_data["password"],
+        },
+    )
+
+    assert login_response.status_code == 200, (
+        login_response.text
+    )
+
+    refresh_token = login_response.json()["refresh_token"]
+
+    response = http_client.get(
+        "/users/me",
+        headers={
+            "Authorization": f"Bearer {refresh_token}",
+        },
+    )
+
+    assert response.status_code == 401, response.text
+
+    assert (
+        response.headers.get("WWW-Authenticate")
+        == "Bearer"
+    )
+   

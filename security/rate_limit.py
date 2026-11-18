@@ -43,7 +43,7 @@ redis.call(
     "ZREMRANGEBYSCORE",
     key,
     "-inf",
-    "(" .. window_start
+    window_start
 )
 
 local current_count = redis.call(
